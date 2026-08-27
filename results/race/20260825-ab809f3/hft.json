@@ -1,0 +1,15 @@
+{
+  "deterministic": true,
+  "events_per_sec": 387432.855328001,
+  "fill_digest": "92f5edb7456a8790c678826d50130f38f75d4d97effbcc1c74fd2f542ce9f7b3",
+  "market_rows": 132011,
+  "notes": "L3 ADD_ORDER+TRADE reconstruction, l3_fifo_queue_model, zero latency; python callback per strategy action; strat_ioc as MARKET; digest = final per-order fills",
+  "ops": 176096,
+  "orders": 35268,
+  "participant": "hftbacktest",
+  "rss_kb_peak": 319088,
+  "runs": 3,
+  "wall_s_max": 3.7667981310005416,
+  "wall_s_median": 0.4545200479988125,
+  "wall_s_min": 0.44383122800354613
+}

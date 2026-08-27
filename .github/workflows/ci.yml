@@ -1,0 +1,359 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CMAKE_BUILD_PARALLEL_LEVEL: "4"
+
+jobs:
+  build:
+    name: ${{ matrix.compiler }} / ${{ matrix.profile }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc-14, gcc-15, clang-19, clang-20]
+        profile: [portable, frontier]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install compiler
+        env:
+          COMPILER: ${{ matrix.compiler }}
+        run: |
+          sudo apt-get update && sudo apt-get install -y libbenchmark-dev ninja-build
+          case "$COMPILER" in
+            gcc-14) sudo apt-get install -y g++-14 ;;
+            gcc-15)
+              sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+              sudo apt-get update && sudo apt-get install -y g++-15 ;;
+            clang-*)
+              wget https://apt.llvm.org/llvm.sh && chmod +x llvm.sh
+              sudo ./llvm.sh "${COMPILER#clang-}" ;;
+          esac
+
+      - name: Configure
+        env:
+          COMPILER: ${{ matrix.compiler }}
+        run: |
+          case "$COMPILER" in
+            gcc-*) export CC=gcc-${COMPILER#gcc-} CXX=g++-${COMPILER#gcc-} ;;
+            clang-*) export CC=clang-${COMPILER#clang-} CXX=clang++-${COMPILER#clang-} ;;
+          esac
+          cmake -B build -G Ninja -DMOG_PROFILE=${{ matrix.profile }} \
+            -DCMAKE_C_COMPILER=$CC -DCMAKE_CXX_COMPILER=$CXX
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  perf-gate:
+    name: perf gate (>10% regression)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: sudo apt-get update && sudo apt-get install -y g++-14 ninja-build libbenchmark-dev
+      - name: Interleaved base/head benchmark comparison
+        run: |
+          export CC=gcc-14 CXX=g++-14
+          BASE=$(git merge-base HEAD origin/main)
+          tools/perfgate.sh "$BASE" --rounds 3
+      - name: Upload gate artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-gate-results
+          path: .perf-gate/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  asm-parity:
+    name: asm parity (hot kernels)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: sudo apt-get update && sudo apt-get install -y g++-14 ninja-build libbenchmark-dev
+      - name: Differential disassembly check vs merge-base
+        run: |
+          export CC=gcc-14 CXX=g++-14
+          tools/asm_parity_ci.sh
+
+  sanitizers:
+    name: asan+ubsan / frontier
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y g++-14 ninja-build libbenchmark-dev
+      - name: Configure and build
+        run: |
+          cmake -B build -G Ninja -DMOG_PROFILE=frontier -DMOG_SANITIZE="address;undefined" \
+            -DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14
+          cmake --build build
+      - run: ctest --test-dir build --output-on-failure
+
+  compatibility-matrix:
+    name: compat matrix
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install g++-15
+        run: |
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          sudo apt-get update && sudo apt-get install -y g++-15 ninja-build
+      - name: Build probe
+        run: |
+          cmake -B build -G Ninja -DMOG_PROFILE=frontier \
+            -DCMAKE_C_COMPILER=gcc-15 -DCMAKE_CXX_COMPILER=g++-15 >/dev/null
+          cmake --build build --target mog-probe
+      - name: Generator is deterministic
+        run: |
+          ./build/tools/probe/mog-probe > /tmp/m1.md
+          ./build/tools/probe/mog-probe > /tmp/m2.md
+          cmp /tmp/m1.md /tmp/m2.md
+      - name: Floor features present
+        run: |
+          for feature in MOG_HAS_EXPECTED MOG_HAS_SATURATE_ARITHMETIC \
+                         MOG_HAS_EMBED MOG_HAS_PACK_INDEXING; do
+            grep -q "\`$feature\` | yes" /tmp/m1.md || {
+              echo "::error::$feature unavailable on a claimed-supported compiler"; exit 1; }
+          done
+
+  cxx23-fallback:
+    name: c++23 consumer fallback
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y g++-13 ninja-build
+      - run: |
+          cmake -B build -G Ninja -DMOG_PROFILE=portable -DMOG_CXX_STANDARD=23 \
+            -DCMAKE_C_COMPILER=gcc-13 -DCMAKE_CXX_COMPILER=g++-13
+          cmake --build build
+      - run: ctest --test-dir build --output-on-failure
+
+  python-wheel:
+    name: python shim + wheel (stock toolchain)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+      # Deliberately no CC/CXX override: the portable profile + C++23 must
+      # build on whatever compiler the distro ships (doctrine #7).
+      - name: In-tree extension + parity tests
+        run: |
+          cmake -B build -G Ninja -DMOG_PROFILE=portable -DMOG_CXX_STANDARD=23 \
+            -DMOG_BUILD_PY=ON
+          cmake --build build --target _core
+          ctest --test-dir build -R mog-py --output-on-failure
+          PYTHONPATH=$PWD/build/pylib python -m unittest discover \
+            -s python/tests -t python/tests -v
+      - name: Build wheel
+        run: |
+          python -m pip install build
+          python -m build --wheel
+      - name: Wheel installs and passes self-contained tests in a fresh venv
+        run: |
+          python -m venv /tmp/wheeltest
+          /tmp/wheeltest/bin/pip install dist/*.whl
+          /tmp/wheeltest/bin/python - <<'EOF'
+          import sys, unittest
+          sys.path.insert(0, "python/tests")
+          import test_mog
+          suite = unittest.TestLoader().loadTestsFromNames([
+              "test_mog.SimulatorParity",
+              "test_mog.Decode",
+              "test_mog.BuildInfo",
+              "test_mog.Book",
+          ])
+          result = unittest.TextTestRunner(verbosity=1).run(suite)
+          sys.exit(0 if result.wasSuccessful() else 1)
+          EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-wheel
+          path: dist/*.whl
+          retention-days: 14
+
+  wheels-dist:
+    name: cibuildwheel (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu-24.04 (cp310-cp312)
+            os: ubuntu-24.04
+            archs: x86_64
+            cibw_build: "cp310-* cp311-* cp312-*"
+            artifact_name: wheels-ubuntu-cp310-cp312
+          - name: ubuntu-24.04 (cp313-cp314)
+            os: ubuntu-24.04
+            archs: x86_64
+            cibw_build: "cp313-* cp314-*"
+            artifact_name: wheels-ubuntu-cp313-cp314
+          - name: macos-14
+            os: macos-14
+            archs: arm64 x86_64 # Apple clang -arch cross-build for Intel
+            cibw_build: "cp310-* cp311-* cp312-* cp313-* cp314-*"
+            artifact_name: wheels-macos-14
+    env:
+      CIBW_ARCHS: ${{ matrix.archs }}
+      CIBW_BUILD: ${{ matrix.cibw_build }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12" # only to run cibuildwheel itself
+      - uses: pypa/cibuildwheel@v4.2.0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: wheelhouse/*.whl
+          retention-days: 14
+
+  determinism-gate:
+    name: cross-compiler digest identity (gcc vs clang)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchains
+        run: |
+          sudo apt-get update && sudo apt-get install -y ninja-build
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          sudo apt-get update && sudo apt-get install -y g++-15
+          wget https://apt.llvm.org/llvm.sh && chmod +x llvm.sh
+          sudo ./llvm.sh 20
+      - name: Build gcc-15 / frontier
+        run: |
+          cmake -B build-gcc -G Ninja -DMOG_PROFILE=frontier \
+            -DCMAKE_C_COMPILER=gcc-15 -DCMAKE_CXX_COMPILER=g++-15
+          cmake --build build-gcc -j4
+      - name: Build clang-20 / frontier
+        run: |
+          cmake -B build-clang -G Ninja -DMOG_PROFILE=frontier \
+            -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20
+          cmake --build build-clang -j4
+      # Same runner CPU, so both frontiers tune -march=native to the same
+      # target: any digest divergence is real codegen dependence.
+      - name: Digest identity gate
+        run: tools/determinism_gate.sh build-gcc build-clang
+
+  fuzz-smoke:
+    name: libFuzzer smoke (parser/book/sim)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang + libFuzzer runtime
+        run: |
+          wget https://apt.llvm.org/llvm.sh && chmod +x llvm.sh
+          sudo ./llvm.sh 20
+          sudo apt-get install -y libclang-rt-20-dev ninja-build
+      - name: Build targets
+        run: |
+          cmake -B build -G Ninja -DMOG_PROFILE=portable -DMOG_BUILD_FUZZ=ON \
+            -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20
+          cmake --build build --target mog-parser_fuzz mog-book_fuzz mog-sim_fuzz
+      # Seeds are curated inputs only; generated corpus accumulates in tmp and
+      # dies with the runner (never committed).
+      - name: Smoke runs
+        run: |
+          mkdir -p /tmp/fc/{parser,book,sim}
+          cp tests/fuzz/seeds/parser/* /tmp/fc/parser/
+          cp tests/fuzz/seeds/book/* /tmp/fc/book/
+          cp tests/fuzz/seeds/sim/* /tmp/fc/sim/
+          ./build/tests/fuzz/mog-parser_fuzz -max_total_time=90 /tmp/fc/parser
+          ./build/tests/fuzz/mog-book_fuzz -max_total_time=90 /tmp/fc/book
+          ./build/tests/fuzz/mog-sim_fuzz -max_total_time=60 /tmp/fc/sim
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-crashes
+          path: crash-*
+
+  tidy-advisory:
+    name: clang-tidy (advisory)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # Advisory by design: findings are surfaced, not gating.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update && sudo apt-get install -y g++-14 ninja-build
+          wget https://apt.llvm.org/llvm.sh && chmod +x llvm.sh
+          sudo ./llvm.sh 20
+          sudo apt-get install -y clang-tidy-20
+      - name: Configure (compile_commands for the analyzer)
+        run: |
+          cmake -B build -G Ninja -DMOG_PROFILE=portable \
+            -DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14 >/dev/null
+      - name: Analyze sources
+        run: |
+          clang-tidy-20 -p build --quiet src/*.cpp tools/unpriced_classify.cpp \
+            | tee tidy-report.txt
+          echo "findings: $(grep -c 'warning:' tidy-report.txt || true)"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tidy-report
+          path: tidy-report.txt
+
+  tla:
+    name: TLC model check (matching spec)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Fetch pinned tla2tools (RFC-0001)
+        run: |
+          curl -fsSL -o /tmp/tla2tools.jar \
+            https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
+          echo "eabd140a70f49eb9305a3bd3f3df944eddf87e5a90d329789085f8953a80533a  /tmp/tla2tools.jar" | sha256sum -c -
+      - name: Model-check BookMatching
+        working-directory: specs/matching
+        run: |
+          set -o pipefail
+          # -config because TLC otherwise treats the bare filename as a
+          # module name and hunts for MC.cfg.cfg; ParallelGC per TLC's own
+          # throughput recommendation; greps below make violations fatal
+          # regardless of TLC's exit-code behavior across versions.
+          java -XX:+UseParallelGC -Xmx2g -cp /tmp/tla2tools.jar \
+            tlc2.TLC -workers 2 -cleanup -config MC.cfg BookMatching.tla | tee tlc.log
+          ! grep -q "^Error:" tlc.log
+          ! grep -Eq "Errors:[[:space:]]*[1-9]" tlc.log
+      - name: Upload TLC log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tlc-log
+          path: specs/matching/tlc.log
+          retention-days: 7

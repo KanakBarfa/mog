@@ -1,0 +1,23 @@
+name: Performance regression
+description: Throughput or latency moved against the archived baselines under results/.
+labels: [performance]
+body:
+  - type: textarea
+    id: baseline
+    attributes:
+      label: Baseline
+      description: Which results/ archive or benchmark protocol run you compared against.
+    validations:
+      required: true
+  - type: textarea
+    id: numbers
+    attributes:
+      label: Numbers
+      description: Before/after with the measurement protocol used (pinning, interleaving, medians).
+    validations:
+      required: true
+  - type: textarea
+    id: suspect
+    attributes:
+      label: Suspected cause
+      description: Commit range, config change, or hardware difference.

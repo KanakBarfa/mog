@@ -1,0 +1,37 @@
+name: Bug report
+description: Something breaks or behaves against its documented contract.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Observed vs expected behavior.
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      options:
+        - C++ CLI (mog replay/trades/simrun/tearsheet)
+        - C++ library/API
+        - Python shim (mog wheel)
+        - tools/ scripts
+        - build system
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      placeholder: mog 0.1.0 or git SHA
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: Commands, inputs (or a byte prefix), profile and compiler.
+    validations:
+      required: true

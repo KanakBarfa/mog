@@ -1,0 +1,21 @@
+build*/
+.cache/
+compile_commands.json
+generated/
+*.o
+*.a
+*.so
+data/*.itch.tmp
+.perf-gate/
+dist/
+__pycache__/
+.pytest_cache/
+*.pyc
+specs/matching/states/
+
+# race harness artifacts
+bench/race/out/
+bench/race/**/__pycache__/
+
+# scratch space for corpora, artifacts, experiments (survives /tmp wipes)
+tmp/

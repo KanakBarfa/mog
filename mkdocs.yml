@@ -1,0 +1,50 @@
+site_name: mog
+site_description: Deterministic L3 limit-order-book backtesting engine
+repo_url: https://github.com/KanakBarfa/mog
+repo_name: KanakBarfa/mog
+docs_dir: docs/site
+site_dir: build/docs
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-night
+        name: switch to light
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-sunny
+        name: switch to dark
+  features:
+    - content.code.copy
+    - navigation.sections
+    - navigation.top
+    - search.highlight
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Examples: examples.md
+  - Python API: python-api.md
+  - Trust:
+      - Fidelity guide: fidelity-guide.md
+      - Model bias reference: model-bias-reference.md
+      - Benchmark methodology: benchmark-methodology.md
+  - Reference:
+      - Benchmarks: benchmarks.md
+      - Multi-instrument: multi-instrument.md
+      - Time-travel debugger: time-travel-debugger.md
+      - C++26 ledger explainer: cpp26-ledger-explainer.md
+      - Changelog: CHANGELOG.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - toc:
+      permalink: true
+
+strict: true

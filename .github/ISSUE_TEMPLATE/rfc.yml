@@ -1,0 +1,25 @@
+name: RFC
+description: Propose a design change through the RFC process (see CONTRIBUTING.md).
+labels: [rfc]
+body:
+  - type: input
+    id: slug
+    attributes:
+      label: Proposed RFC number and slug
+      placeholder: "0007-mold-ingest-refactor"
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is wrong or missing; evidence over opinion.
+    validations:
+      required: true
+  - type: textarea
+    id: design
+    attributes:
+      label: Design sketch
+      description: Approach, alternatives considered, determinism impact.
+    validations:
+      required: true

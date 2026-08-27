@@ -1,0 +1,30 @@
+name: codeql
+
+on:
+  schedule:
+    - cron: "0 6 3 * *" # monthly, 03rd at 06:00 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  analyze:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: cpp, python
+          build-mode: manual
+      - name: Build (portable profile, contracts compiled out)
+        run: |
+          sudo apt-get update && sudo apt-get install -y g++-14 ninja-build
+          cmake -B build -G Ninja -DMOG_PROFILE=portable \
+            -DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14
+          cmake --build build
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:cpp,python"

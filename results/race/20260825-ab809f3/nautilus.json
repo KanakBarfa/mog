@@ -1,0 +1,14 @@
+{
+  "deterministic": true,
+  "events_per_sec": 35447.82100072111,
+  "fill_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "fills": 0,
+  "market_rows": 132011,
+  "notes": "round 2: L1_MBP venue over synthesized top-of-book quotes + trade prints; limits rest, cancels cancel; ops/s counts strategy-relevant trades per second of engine.run()",
+  "ops": 176096,
+  "participant": "nautilus",
+  "rss_kb_peak": 483776,
+  "runs": 2,
+  "ticks_processed": 280064,
+  "wall_s_median": 2.258925872999953
+}

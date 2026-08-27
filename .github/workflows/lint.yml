@@ -1,0 +1,28 @@
+name: lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: ruff (lint + format check)
+        run: |
+          pipx install ruff==0.16.4
+          ruff check python/ tools/ tests/python/ bench/
+          ruff format --check python/ tools/ tests/python/ bench/
+      - name: clang-format check
+        # Pinned to the exact version the pre-commit hook uses (apt ships
+        # clang-format 18 on 24.04, which disagrees with 21 on spacing).
+        run: |
+          pipx install clang-format==21.1.8
+          git ls-files "*.cpp" "*.hpp" "*.h" "*.cc" \
+            | xargs clang-format --dry-run --Werror

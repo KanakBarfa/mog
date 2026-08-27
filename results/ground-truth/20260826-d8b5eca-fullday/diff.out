@@ -1,0 +1,10 @@
+
+window-restricted reference (market center Q only): 26311401
+matched exactly:            18014177
+OURS WITHOUT REF (fails):   7776
+ref-only (Q-center):        8297224
+
+all-center reference rows in window:
+  2: 535284
+  L: 59452627
+  Q: 26311401

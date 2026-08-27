@@ -1,0 +1,15 @@
+{
+  "deterministic": true,
+  "events_per_sec": 11741.740110222378,
+  "fill_digest": "a7597f9cef25dea23a55a3c443da64cbc5d47cf2828345f212dda3c8d4e0a90b",
+  "fills": 3308,
+  "market_rows": 132011,
+  "notes": "python shim over native core; per-op drain(); zero latencies/fees",
+  "ops": 176096,
+  "participant": "mog",
+  "rss_kb_peak": 312212,
+  "runs": 3,
+  "wall_s_max": 15.27986952900028,
+  "wall_s_median": 14.997436354999081,
+  "wall_s_min": 14.676046707998466
+}

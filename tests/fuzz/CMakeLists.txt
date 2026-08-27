@@ -1,0 +1,10 @@
+# libFuzzer targets; Clang-only (libFuzzer ships with compiler-rt).
+if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  message(FATAL_ERROR "MOG_BUILD_FUZZ requires Clang (libFuzzer runtime)")
+endif()
+foreach(target parser_fuzz book_fuzz sim_fuzz)
+  add_executable(mog-${target} ${target}.cpp)
+  target_link_libraries(mog-${target} PRIVATE mog_flags mog_alloc)
+  target_compile_options(mog-${target} PRIVATE -fsanitize=fuzzer,address)
+  target_link_options(mog-${target} PRIVATE -fsanitize=fuzzer,address)
+endforeach()

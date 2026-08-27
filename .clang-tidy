@@ -1,0 +1,15 @@
+# Advisory quality gate: runs in CI without blocking. Checks are curated
+# for signal over noise on a -fno-exceptions C++26 engine.
+checks: >
+  bugprone-*,
+  performance-*,
+  misc-unused-*,
+  modernize-use-override,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-exception-escape,
+  -bugprone-narrowing-conversions,
+  -performance-enum-size
+
+warnings-as-errors: []
+format-style: file
+header-filter: 'include/mog/.*'

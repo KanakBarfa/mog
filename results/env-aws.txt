@@ -1,0 +1,6 @@
+host: aws
+cpu: Intel(R) Core(TM) i5-7500T CPU @ 2.70GHz (4 cores)
+kernel: 7.0.0-30-generic
+compiler: g++ (Ubuntu 15.2.0-16ubuntu1) 15.2.0
+commit: 0be3acb5b76aafaa77501fdf7c0d91c2349dc04f
+date: 20260824T053254Z

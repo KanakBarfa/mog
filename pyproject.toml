@@ -1,0 +1,78 @@
+[build-system]
+requires = ["scikit-build-core>=0.11", "nanobind>=2.8"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "mog"
+# Single source of truth is CMakeLists.txt project(VERSION); see metadata table below.
+dynamic = ["version"]
+description = "Deterministic L3 limit-order-book backtesting engine"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+keywords = ["market-data", "order-book", "backtesting", "itch"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: C++",
+  "Topic :: Office/Business :: Financial :: Investment",
+]
+
+[project.optional-dependencies]
+# Optional output formats; the core shim stays dependency-free by design.
+parquet = ["pyarrow>=14"]
+
+[tool.scikit-build]
+cmake.version = ">=3.28"
+build.targets = ["_core"]
+wheel.packages = ["python/mog"]
+wheel.exclude = ["*.cpp"]
+
+[tool.scikit-build.metadata.version]
+provider = "scikit_build_core.metadata.regex"
+input = "CMakeLists.txt"
+regex = '^\s*VERSION\s+(?P<value>\d+\.\d+\.\d+)\s*$'
+
+# The wheel ships the portable profile on the consumer-fallback C++ dialect:
+# no -march, contracts compiled out, stock distro toolchain suffices.
+[tool.scikit-build.cmake.define]
+MOG_PROFILE = "portable"
+MOG_CXX_STANDARD = "23"
+MOG_BUILD_PY = "ON"
+
+# Distribution-grade wheels (CI): manylinux repair on Linux, dual-arch on
+# macOS. The in-tree python-wheel job remains the stock-toolchain doctrine
+# proof; these are what users actually pip-install.
+[tool.cibuildwheel]
+build = ["cp310-*", "cp311-*", "cp312-*", "cp313-*", "cp314-*"]
+# Wheel-level gate: the unittest suite plus the quickstart example against
+# the installed wheel.
+test-command = [
+  "python -m unittest discover -v -s {project}/python/tests -t {project}/python/tests",
+  "python {project}/examples/python/quickstart.py",
+]
+
+[tool.cibuildwheel.linux]
+environment = { CMAKE_BUILD_PARALLEL_LEVEL = "4" }
+repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel}"
+
+# C++17 aligned allocation (used by nanobind and our AllocGuard) requires
+# macOS >= 10.13/10.15; cibuildwheel would otherwise default x86_64 to 10.9.
+[tool.cibuildwheel.macos]
+environment = { MACOSX_DEPLOYMENT_TARGET = "11.0", CMAKE_BUILD_PARALLEL_LEVEL = "4" }
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# Defaults (E4/E7/E9/F) plus import sorting, upgrades, simplification.
+extend-select = ["I", "UP", "SIM", "C4", "B", "RUF", "PL", "EXE"]
+# Lazy imports and numeric thresholds are idiomatic here; structural-
+# complexity policing is a deliberate refactor, not a lint pass.
+ignore = ["PLC0415", "PLR2004", "PLR0912", "PLR0915", "PLR0913", "PLR0917"]
+
+[tool.ruff.lint.per-file-ignores]
+# Race participants mutate sys.path before imports by design.
+"bench/race/**" = ["E402"]

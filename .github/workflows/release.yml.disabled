@@ -1,0 +1,119 @@
+name: release
+
+# Tag-driven distribution: wheels (cp310-cp314, manylinux + dual-arch macOS),
+# sdist, TestPyPI via trusted publishing with attestations, GitHub Release
+# with checksums and the matching CHANGELOG section. Promotion to real PyPI
+# means deleting repository-url and registering the publisher there.
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+jobs:
+  build_wheels:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu-24.04 (cp310-cp312)
+            os: ubuntu-24.04
+            cibw_build: "cp310-* cp311-* cp312-*"
+            artifact_name: wheels-ubuntu-cp310-cp312
+          - name: ubuntu-24.04 (cp313-cp314)
+            os: ubuntu-24.04
+            cibw_build: "cp313-* cp314-*"
+            artifact_name: wheels-ubuntu-cp313-cp314
+          - name: macos-latest
+            os: macos-latest
+            cibw_build: "cp310-* cp311-* cp312-* cp313-* cp314-*"
+            artifact_name: wheels-macos
+    name: build_wheels (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      CIBW_BUILD: ${{ matrix.cibw_build }}
+      CIBW_ARCHS_MACOS: "arm64 x86_64"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v4.2.0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: wheelhouse/*.whl
+
+  build_sdist:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pipx install build && python -m build --sdist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  publish_pypi:
+    needs: [build_wheels, build_sdist]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: pypi
+    permissions:
+      id-token: write # trusted publishing (OIDC) + attestations
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-raw
+          merge-multiple: true
+      - name: Collect dists
+        run: mkdir dist && mv dist-raw/*.whl dist-raw/*.tar.gz dist/
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  github_release:
+    needs: [build_wheels, build_sdist]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-raw
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          mkdir rel && mv dist-raw/*.whl dist-raw/*.tar.gz rel/
+          cd rel && sha256sum *.whl *.tar.gz > SHA256SUMS.txt
+      - name: Extract changelog section
+        run: |
+          python3 - <<'EOF'
+          import os, pathlib, re
+
+          ver = os.environ.get("GITHUB_REF_NAME", "").lstrip("v")
+          text = pathlib.Path("CHANGELOG.md").read_text()
+          pat = rf"## \[{re.escape(ver)}\].*?(?=\n## |\Z)"
+          m = re.search(pat, text, re.S)
+          body = m.group(0) if m else f"Release {ver} (no changelog entry found)."
+          pathlib.Path("body.md").write_text(body)
+          EOF
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: rel/*
+          body_path: body.md
+
+# MANUAL PREREQUISITE (one-time): register this repo as a Trusted Publisher on
+# test.pypi.org (https://test.pypi.org/manage/account/publishing, project
+# `mog`, workflow `release.yml`, environment `pypi`) and create the protected
+# `pypi` environment here. Until then publish_pypi fails closed rather than
+# fall back to tokens.

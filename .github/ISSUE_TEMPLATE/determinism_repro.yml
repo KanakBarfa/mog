@@ -1,0 +1,31 @@
+name: Determinism repro
+description: The same inputs produced different outputs. This is the highest-priority bug class in mog.
+labels: [bug, determinism]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A repro beats a reproach: identical inputs must give identical
+        digests, fills, and logs across runs, languages, and machines.
+  - type: textarea
+    id: divergence
+    attributes:
+      label: Divergence observed
+      description: The two digests/outputs and where they first differ (first_decision_divergence can pinpoint this).
+    validations:
+      required: true
+  - type: textarea
+    id: inputs
+    attributes:
+      label: Inputs and environment
+      description: Script/capture, seed, profile, compiler and flags, OS/arch.
+    validations:
+      required: true
+  - type: checkboxes
+    id: ruled_out
+    attributes:
+      label: Ruled out
+      options:
+        - label: Unordered iteration or pointer-address dependence in my own code
+        - label: Different input bytes (framing/day-boundary mismatch)
+        - label: Floating-point accumulation order in my own strategy code

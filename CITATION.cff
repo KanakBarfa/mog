@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+title: mog - deterministic L3 limit-order-book backtesting engine
+message: >-
+  If you use mog in research, please cite it using this metadata.
+authors:
+  - family-names: Barfa
+    given-names: Kanak
+    email: kanakbarfa@gmail.com
+version: 0.1.0
+date-released: "2026-08-25"
+license: MIT
+repository-code: "https://github.com/KanakBarfa/mog"
+abstract: >-
+  A deterministic nanosecond-scale limit-order-book backtesting engine.
+  ITCH 5.0 ingestion, an L3 matching core with contract-checked bounds,
+  an execution simulator with latency and NASDAQ-native order types, and
+  byte-exact cross-language reproducibility pinned by golden digests.
+keywords:
+  - market-data
+  - order-book
+  - backtesting
+  - itch
+  - determinism

@@ -1,0 +1,24 @@
+// Embedded golden sample; regenerated when MOG_HAS_EMBED.
+#pragma once
+
+#include <cstddef>
+
+// Clang flags #embed in C++ mode as a C23 extension; suppress locally only.
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wc23-extensions"
+#endif
+
+namespace mog::testing {
+
+inline constexpr unsigned char kSampleItch[] = {
+#embed "@MOG_SAMPLE_PATH@"
+};
+
+inline constexpr std::size_t kSampleItchSize = sizeof(kSampleItch);
+
+}  // namespace mog::testing
+
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
