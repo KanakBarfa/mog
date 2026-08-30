@@ -1,73 +1,95 @@
-# Implementation Plan: mog Architectural Roadmap
+# Engineering Roadmap: mog Architecture & Expansions
 
-This document outlines the high-priority engineering roadmap for `mog`:
-* **Part I: Multi-Protocol Market Data Ingestion**: Direct binary parsing of CME futures and European derivatives.
-* **Part II: Execution Gateway & Institutional Trading**: OUCH 5.0 order entry, cross-instrument margin, and impact dynamics.
-* **Part III: High-Throughput Analytics & Zero-Copy API**: PyArrow C Data Interface, columnar streaming, and expanded Python surfaces.
+This document outlines the focused, high-leverage architectural roadmap for `mog`.
 
 ---
 
 ```mermaid
-graph TD
-    subgraph Part1["Part I: Multi-Protocol Market Data Ingestion"]
-        M1["CME MDP 3.0 SBE Binary Decoder"]
-        M2["Eurex T7 EMDI Multicast Feed Handler"]
-        M3["Crypto L3 Normalized Aggregation Bridge"]
+graph LR
+    subgraph Phase1["Phase 1: Zero-Copy Analytics & Python Ecosystem"]
+        direction TB
+        A1["Apache Arrow C Data Interface (arrow::ArrayStream)"]
+        A2["Snappy/Zstd Columnar Parquet Sink"]
+        A3["Full StrategyRunner & SimEngine Python API Surface"]
     end
-    subgraph Part2["Part II: Execution Gateway & Institutional Risk"]
+
+    subgraph Phase2["Phase 2: Execution Gateway & Institutional Fidelity"]
+        direction TB
         E1["OUCH 5.0 Deterministic Inbound Protocol Engine"]
-        E2["Cross-Instrument Portfolio Margin & VaR"]
-        E3["Nonlinear Transient Market Impact Dynamics"]
+        E2["Almgren-Chriss Nonlinear Market Impact Dynamics"]
+        E3["Synchronized Multi-Instrument Event Orchestrator"]
     end
-    subgraph Part3["Part III: Zero-Copy Analytics & Ecosystem"]
-        A1["Apache Arrow RecordBatch C Data Interface"]
-        A2["Snappy/Zstd Compressed Parquet Sink"]
-        A3["Full Strategy & Execution Python Nanobind Surface"]
+
+    subgraph Phase3["Phase 3: Fast Determinism Hashing"]
+        direction TB
+        H1["Dual-Tier Fast Digest (XXH3-128 + NIST SHA-256)"]
     end
+
+    Phase1 --> Phase2
+    Phase2 --> Phase3
 ```
 
 ---
 
-# Part I: Multi-Protocol Market Data Ingestion
+## Phase 1: Zero-Copy Analytics & Python Ecosystem
 
-### 1. CME MDP 3.0 (Simple Binary Encoding - SBE)
-* **Design**: Direct binary parsing of CME futures and options market data with FIX/FAST template decoding.
-* **Architecture**: Direct struct overlay on memory buffers with zero heap allocations and inline endian conversion.
+Highest leverage for quantitative research, backtest evaluation, and data pipelines.
 
-### 2. Eurex T7 EMDI Multicast Feed Handler
-* **Design**: Multicast feed handler for European cash and derivatives markets.
-* **Architecture**: Deterministic order book reconstruction across multi-channel packet streams with gap recovery.
+### 1. Apache Arrow C Data Interface (`arrow::ArrayStream`)
+* **Objective**: Stream trade tapes, order book snapshots, and execution logs directly into Python without memory copies or serialization overhead.
+* **Architecture**: 
+  * Expose an in-memory Arrow C Data Interface structure (`ArrowArrayStream` / `ArrowSchema`) directly from `Recorder` ([include/mog/Trades.hpp](include/mog/Trades.hpp)) and `Tearsheet` ([include/mog/Tearsheet.hpp](include/mog/Tearsheet.hpp)).
+  * Zero-copy consumption in Python via **Polars** (`pl.from_arrow()`), **DuckDB**, or **PyArrow**.
+  * Eliminates intermediate CSV serialization and allows querying 50M replayed rows in milliseconds.
 
-### 3. Crypto Normalized L3 Ingestion Bridge
-* **Design**: Normalized L3 and L2 delta feeds for Binance, Coinbase, and OKX.
-* **Architecture**: Zero-copy JSON/WebSocket framing into native `mog::Message` frames.
+### 2. High-Throughput Columnar Parquet Sink
+* **Objective**: Replace heavy CSV disk dumps with ultra-compressed, production-ready `.parquet` files.
+* **Architecture**:
+  * Implement a zero-allocation columnar buffer writer that encodes columns using Dictionary, Run-Length Encoding (RLE), and Snappy/Zstd compression.
+  * Achieves 10x to 30x storage reduction over raw CSV while enabling instant column pruning during downstream research.
 
----
-
-# Part II: Execution Gateway & Institutional Risk
-
-### 1. OUCH 5.0 Deterministic Order Entry Engine
-* **Design**: Enter Order, Replace Order, Cancel Order, and Mass Cancel over binary OUCH 5.0 protocols.
-* **Architecture**: Sequenced inbound matching engine clocking replicating exchange-native queue priority and outbound execution reports.
-
-### 2. Real-Time Portfolio Margin & VaR
-* **Design**: Deterministic portfolio-level SPAN and VaR margin calculators updated tick-by-tick on every execution.
-* **Architecture**: Constant-time matrix updates with AVX-512 vectorization across multi-asset positions.
-
-### 3. Nonlinear Transient Market Impact Model
-* **Design**: Almgren-Chriss square-root temporary and permanent market impact with endogenous order book liquidity refills.
-* **Architecture**: Sub-nanosecond impact kernel evaluated on fill dispatches.
+### 3. Complete Python Nanobind API Surface
+* **Objective**: Allow quant researchers to write, backtest, and inspect strategies natively from Python without compiling custom C++ binaries for every experiment.
+* **Architecture**:
+  * Expand [python/mog/_core.cpp](python/mog/_core.cpp) to expose `StrategyRunner`, `SimEngine`, `tearsheet::compute()`, and `TimeTravelSession`.
+  * Deliver strategy callback events (`on_order_book_update`, `on_order_fill`) into Python while preserving native C++ replay speeds for the background engine loop.
 
 ---
 
-# Part III: Zero-Copy Analytics & Ecosystem
+## Phase 2: Execution Gateway & Institutional Fidelity
 
-### 1. Apache Arrow C Data Interface
-* **Design**: Stream telemetry, book snapshots, and trade records directly into Apache Arrow `RecordBatch` buffers without intermediate serialization.
-* **Architecture**: Direct pointer passing to Python (PyArrow, Polars, DuckDB) via C Data Interface.
+Bridges simulated order flow with institutional exchange protocols and market dynamics.
 
-### 2. High-Throughput Parquet Sink
-* **Design**: Columnar disk writer emitting Snappy and Zstd compressed Apache Parquet files for long-term historical archives.
+### 1. OUCH 5.0 Deterministic Inbound Protocol Engine
+* **Objective**: Mirror NASDAQ's native order submission protocol (OUCH 5.0) symmetrically with the ITCH market data parser.
+* **Architecture**:
+  * Zero-copy parser for binary OUCH messages: `Enter Order`, `Replace Order`, `Cancel Order`, `System Event`, `Order Accepted`, `Order Executed`, `Order Cancelled`, `Order Rejected`.
+  * Strict layout audits (`static_assert(offsetof(...))`) matching NASDAQ wire specifications.
+  * Inbound queue ordering replicating exchange hardware network interface timestamps.
 
-### 3. Complete Python Nanobind Public API Surface
-* **Design**: Expose `StrategyRunner`, `simrun::run()`, `tearsheet::compute()`, and `ColumnLogReader` to Python.
+### 2. Almgren-Chriss Nonlinear Market Impact Model
+* **Objective**: Prevent unrealistic fill assumptions for large-scale institutional orders by modeling price impact.
+* **Architecture**:
+  * Implement square-root temporary and permanent price impact:
+    $$\Delta P_{\text{perm}} = \gamma \cdot \sigma \cdot \left(\frac{Q}{V}\right)^\alpha, \quad \Delta P_{\text{temp}} = \eta \cdot \sigma \cdot \left(\frac{q}{v}\right)^\beta$$
+  * Couple aggressive order consumption with endogenous book liquidity refill dynamics, penalizing large aggressive sweeps with realistic slippage.
+
+### 3. Synchronized Multi-Instrument Cross-Asset Orchestrator
+* **Objective**: Upgrade [include/mog/Orchestrate.hpp](include/mog/Orchestrate.hpp) to support multi-leg pairs trading and statistical arbitrage strategies across multiple stocks.
+* **Architecture**:
+  * Replace independent linear time broadcasts with a unified multi-instrument event priority queue.
+  * Interleave tick events across all instruments in exact global timestamp sequence, allowing cross-asset strategies to react instantaneously to lead-lag signals.
+
+---
+
+## Phase 3: Fast Determinism Digest Acceleration
+
+Speed up test suite execution, differential fuzzing, and local benchmark runs.
+
+### 1. Dual-Tier Fast Digest (XXH3-128 + SHA-256)
+* **Objective**: Remove cryptographic SHA-256 overhead from inner-loop benchmarking and fuzzing while preserving golden verification gates.
+* **Architecture**:
+  * Introduce a fast 128-bit vectorized digest (`XXH3_128bits` or SIMD SWAR fold) for local sweeps, fuzz runs, and hot benchmark loops (~1 ns/op vs ~40 Ir/msg for SHA-256).
+  * Retain NIST SHA-256 ([include/mog/Sha256.hpp](include/mog/Sha256.hpp)) for CI golden anchors and pull-request verification.
+
+
