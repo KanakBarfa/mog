@@ -61,14 +61,19 @@ Windows toolchains do not provide; bring an RFC if you need it.
 
 ## What is inside
 
-- ITCH 5.0 ingestion over mmap or read(); BinaryFILE and MoldUDP64 framing
-  where sequence gaps are loud errors, never silent corruption
-- L3 matching core: price/time priority, STP modes, contract-checked bounds
+- ITCH 5.0 ingestion over mmap or read(); BinaryFILE, MoldUDP64, and zero-copy
+  PCAP/Ethernet-IPv4-UDP framing where sequence gaps are loud errors
+- SIMD AVX2/AVX-512 vectorized wire scanning and branchless symbol dispatch
+- L3 matching core: price/time priority, STP modes, contract-checked bounds,
+  and hierarchical 2-level bitmasks for O(1) price ladder traversals
 - Execution simulator: parse/decision/wire latency pipeline with jitter,
-  flow depletion and momentum, icebergs, NASDAQ-native odd-lot (`nd`) and
-  pegged facilities with automatic repegging
-- Session model: phases, halt gating, NOII close crosses (validated against
-  NASDAQ's public NOII sample, 5.95M snapshots)
+  depth-decay power-law queue depletion, icebergs, NASDAQ-native odd-lot (`nd`),
+  and pegged facilities (midpoint, primary, market) with automatic repegging
+- Session model: phases, halt gating, NOII Opening, Closing, and Halt cross auctions
+- Multi-threaded lock-free parallel grid runner for high-throughput parameter sweeps
+- Hardware PMU / Linux perf event counters (IPC, branch misses, L1D cache misses)
+- Columnar telemetry with native Zstd/Snappy Parquet sinks and Apache Arrow export
+- Quantitative metrics: Hasbrouck Information Share and cross-asset lead-lag analysis
 - Trade reconstruction plus canonical CSV diff against the official tape
 - CRTP strategy harness, columnar telemetry, tearsheet recomputed from the
   log alone by independent arithmetic

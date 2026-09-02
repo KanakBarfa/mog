@@ -3,6 +3,7 @@
 // See docs/FILLMODEL.md for the queue arithmetic.
 #pragma once
 
+#include <mog/FastDigest.hpp>
 #include <mog/OrderBook.hpp>
 #include <mog/Reflect.hpp>
 #include <mog/Scheduler.hpp>
@@ -18,7 +19,15 @@
 
 namespace mog {
 
-enum class SimOrderType : std::uint8_t { day_limit = 0, market = 1, ioc = 2, post_only = 3 };
+enum class SimOrderType : std::uint8_t {
+    day_limit = 0,
+    market = 1,
+    ioc = 2,
+    post_only = 3,
+    midpoint_peg = 4,
+    primary_peg = 5,
+    market_peg = 6
+};
 
 // Outbound latency jitter shape. Exponential and normal modes use
 // jitter_mean_ns / jitter_sigma_ns and are truncated at 8x the mean so
@@ -71,6 +80,9 @@ struct SimConfig {
     // default and leave every number bit-identical to the fee-free engine.
     std::int64_t maker_fee_bps = 0;
     std::int64_t taker_fee_bps = 0;
+    std::uint32_t depth_depletion_levels = 1;
+    double depth_decay_alpha = 1.0;
+    DigestMode digest_mode = DigestMode::golden;
 };
 
 // Signed basis points of notional, truncated toward zero (integer ticks;
@@ -176,7 +188,7 @@ public:
 
     explicit ExecutionSimulator(SimConfig cfg)
         : cfg_(cfg), book_(cfg.book), wheel_(cfg.event_capacity), tracked_(cfg.book.arena_capacity),
-          rng_(cfg.seed) {}
+          trace_(cfg.digest_mode), rng_(cfg.seed) {}
 
     [[nodiscard]] const BookT& book() const noexcept { return book_; }
     [[nodiscard]] const SimConfig& config() const noexcept { return cfg_; }
@@ -475,14 +487,42 @@ private:
     void apply_depletion(Side s, std::uint64_t qty) {
         if (qty == 0)
             return;
-        const std::int64_t touch = s == Side::buy ? book_.best_bid() : book_.best_ask();
-        if (touch == kNoTick)
+        if (cfg_.depth_depletion_levels <= 1 || cfg_.depth_decay_alpha == 0.0) {
+            const std::int64_t touch = s == Side::buy ? book_.best_bid() : book_.best_ask();
+            if (touch == kNoTick)
+                return;
+            const std::int64_t avail = book_.qty_at(s, Price{touch});
+            const std::int64_t applied =
+                std::min<std::int64_t>(static_cast<std::int64_t>(qty), avail);
+            if (applied <= 0)
+                return;
+            consume_level(s, Price{touch}, applied);
             return;
-        const std::int64_t avail = book_.qty_at(s, Price{touch});
-        const std::int64_t applied = std::min<std::int64_t>(static_cast<std::int64_t>(qty), avail);
-        if (applied <= 0)
+        }
+
+        std::int64_t current_tick = s == Side::buy ? book_.best_bid() : book_.best_ask();
+        if (current_tick == kNoTick)
             return;
-        consume_level(s, Price{touch}, applied);
+        std::uint64_t rem_qty = qty;
+        for (std::uint32_t lvl = 0;
+             lvl < cfg_.depth_depletion_levels && current_tick != kNoTick && rem_qty > 0; ++lvl) {
+            const std::int64_t avail = book_.qty_at(s, Price{current_tick});
+            if (avail > 0) {
+                const double weight =
+                    std::pow(1.0 + static_cast<double>(lvl), -cfg_.depth_decay_alpha);
+                const std::int64_t target = std::max<std::int64_t>(
+                    1, static_cast<std::int64_t>(static_cast<double>(rem_qty) * weight));
+                const std::int64_t applied = std::min<std::int64_t>(target, avail);
+                if (applied > 0) {
+                    consume_level(s, Price{current_tick}, applied);
+                    rem_qty = (rem_qty >= static_cast<std::uint64_t>(applied))
+                                  ? (rem_qty - static_cast<std::uint64_t>(applied))
+                                  : 0;
+                }
+            }
+            current_tick = s == Side::buy ? book_.next_price_below(s, current_tick)
+                                          : book_.next_price_above(s, current_tick);
+        }
     }
 
     // Doubled mid (bid + ask) so one-tick moves on odd sums still register;
@@ -656,6 +696,9 @@ private:
         const std::int64_t fee = fee_bps_of(notional, cfg_.maker_fee_bps);
         reports_.push_back(SimFillReport{vis, t.ref, price, static_cast<std::uint32_t>(qty),
                                          ++seq_counter_, t.side, fee});
+        total_filled_notional_ += notional;
+        total_fees_ += fee;
+        ++fill_count_;
         model_filled_ += static_cast<std::uint64_t>(qty);
         trace_.update(&vis, sizeof(vis));
         const auto ref = t.ref;
@@ -765,6 +808,16 @@ private:
         now_hint_ = decision_ts;
         repeg_hidden();
         SimInbound in = in0;
+        if (in.type == SimOrderType::midpoint_peg) {
+            in.peg = Peg::mid;
+            in.non_displayed = true;
+        } else if (in.type == SimOrderType::primary_peg) {
+            in.peg = in.side == Side::buy ? Peg::bid : Peg::ask;
+            in.non_displayed = true;
+        } else if (in.type == SimOrderType::market_peg) {
+            in.peg = in.side == Side::buy ? Peg::ask : Peg::bid;
+            in.non_displayed = true;
+        }
         if (in.peg != Peg::none) {
             const std::int64_t px = hidden_reference(in.peg, in.peg_offset_ticks);
             if (px == kNoTick) { // reference side absent: reject cleanly
@@ -827,7 +880,9 @@ private:
         }
 
         const bool rests =
-            (in.type == SimOrderType::day_limit || in.type == SimOrderType::post_only) &&
+            (in.type == SimOrderType::day_limit || in.type == SimOrderType::post_only ||
+             in.type == SimOrderType::midpoint_peg || in.type == SimOrderType::primary_peg ||
+             in.type == SimOrderType::market_peg) &&
             remaining > 0;
         const bool goes_hidden = in.non_displayed || in.peg != Peg::none;
         if (rests && !goes_hidden) {
@@ -866,6 +921,10 @@ private:
         d.visible_ts = vis;
         d.side = side;
         d.seq = ++seq_counter_;
+        total_filled_notional_ += d.filled_notional;
+        total_fees_ += d.fee;
+        if (d.filled_qty > 0)
+            ++fill_count_;
         decisions_.push_back(d);
         trace_.update(&vis, sizeof(vis));
         trace_.update(&d.kind, sizeof(d.kind));
@@ -911,9 +970,17 @@ public:
     void set_stp_mode(StpMode m) noexcept { stp_ = m; }
     [[nodiscard]] StpMode stp_mode() const noexcept { return stp_; }
     [[nodiscard]] const std::vector<SimDecision>& decisions() const noexcept { return decisions_; }
+    [[nodiscard]] std::uint64_t total_filled_notional() const noexcept {
+        return total_filled_notional_;
+    }
+    [[nodiscard]] std::int64_t total_fees() const noexcept { return total_fees_; }
+    [[nodiscard]] std::size_t total_fill_count() const noexcept { return fill_count_; }
+    [[nodiscard]] DigestMode digest_mode() const noexcept { return cfg_.digest_mode; }
     [[nodiscard]] std::array<unsigned char, 32> trace_digest() const noexcept {
-        Sha256 copy = trace_;
-        return copy.finish();
+        return trace_.finish_sha256();
+    }
+    [[nodiscard]] std::array<unsigned char, 16> fast_trace_digest() const noexcept {
+        return trace_.finish_fast128();
     }
 
 private:
@@ -925,7 +992,11 @@ private:
     // check_conservation so audits never scan configured capacity.
     mutable std::vector<std::uint32_t> live_tracked_;
     std::vector<Iceberg> icebergs_;
+    DeterminismDigest trace_{DigestMode::golden};
     std::mt19937_64 rng_;
+    std::uint64_t total_filled_notional_ = 0;
+    std::int64_t total_fees_ = 0;
+    std::size_t fill_count_ = 0;
     bool halted_ = false;
 
     // ---- Non-displayed ledger (G8) --------------------------------------
@@ -991,12 +1062,15 @@ private:
             notional_out +=
                 static_cast<std::uint64_t>(take) * static_cast<std::uint64_t>(price.ticks);
             trace_hidden_fill(h.ref, price.ticks, take);
+            const auto notional =
+                static_cast<std::uint64_t>(take) * static_cast<std::uint64_t>(price.ticks);
+            const std::int64_t fee = fee_bps_of(notional, cfg_.maker_fee_bps);
             reports_.push_back(SimFillReport{now_hint_, h.ref, price.ticks,
                                              static_cast<std::uint32_t>(take), ++seq_counter_,
-                                             s == Side::buy ? 'B' : 'S',
-                                             fee_bps_of(static_cast<std::uint64_t>(take) *
-                                                            static_cast<std::uint64_t>(price.ticks),
-                                                        cfg_.maker_fee_bps)});
+                                             s == Side::buy ? 'B' : 'S', fee});
+            total_filled_notional_ += notional;
+            total_fees_ += fee;
+            ++fill_count_;
             model_filled_ += static_cast<std::uint64_t>(take);
             if (h.qty_remaining == 0)
                 hidden_.erase(hidden_.begin() + static_cast<std::ptrdiff_t>(i));
@@ -1024,7 +1098,6 @@ private:
 
     std::vector<SimFillReport> reports_;
     std::vector<SimDecision> decisions_;
-    Sha256 trace_;
     StpMode stp_ = StpMode::none;
     std::uint64_t naive_filled_ = 0;
     std::uint64_t model_filled_ = 0;

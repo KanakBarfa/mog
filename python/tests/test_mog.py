@@ -441,5 +441,137 @@ class FeeParity(unittest.TestCase):
         self.assertGreater(charged.decisions()[0].fee, 0)
 
 
+class PhaseOneAnalytics(unittest.TestCase):
+    def test_run_trades_and_arrow(self):
+        path = REPO / "data" / "sample.itch"
+        if not path.exists():
+            self.skipTest("repo checkout required (no data/sample.itch)")
+        raw = path.read_bytes()
+        summary = mog.run_trades(
+            raw,
+            arena_capacity=1 << 18,
+            lo_tick=0,
+            hi_tick=12_000_000,
+            page_pool=256,
+            format="raw",
+        )
+        self.assertGreater(summary.decoded, 0)
+        self.assertEqual(len(summary.records()), summary.prints)
+        sch_cap, arr_cap = summary.to_arrow()
+        self.assertIsNotNone(sch_cap)
+        self.assertIsNotNone(arr_cap)
+
+    def test_simrun_and_tearsheet(self):
+        script = """kind,ts_ns,side,price_ticks,qty,ref
+ext_add,100,B,1998,400,11
+ext_add,100,S,2002,380,12
+strat_limit,150,B,1997,50,7001
+trade,250,S,1998,120,9101
+"""
+        sim_summary = mog.run_simrun_script(
+            script, arena_capacity=1 << 16, lo_tick=0, hi_tick=10_000
+        )
+        self.assertEqual(sim_summary.script_rows, 4)
+
+        log_csv = """type,ts_ns,ref,side,price_ticks,qty,fee_cash,mid_ticks,ledger
+P,100,1,B,2000,100,0,2000,M
+F,150,7001,B,1997,50,-2,2000,M
+P,250,2,S,1998,120,0,1998,M
+"""
+        tearsheet = mog.compute_tearsheet_from_csv(log_csv)
+        self.assertEqual(tearsheet.fills, 1)
+        self.assertEqual(tearsheet.prints, 2)
+        self.assertEqual(tearsheet.buy_qty, 50)
+
+    def test_strategy_runner(self):
+        class StatStrategy(mog.Strategy):
+            def __init__(self):
+                super().__init__()
+                self.book_count = 0
+                self.fill_count = 0
+
+            def on_order_book_update(self, update):
+                self.book_count += 1
+
+            def on_order_fill(self, fill):
+                self.fill_count += 1
+
+        strat = StatStrategy()
+        runner = mog.StrategyRunner(strategy=strat, lo_tick=0, hi_tick=10000)
+        self.assertTrue(runner.seed_external(1, "B", 100, 2000))
+        self.assertTrue(runner.seed_external(2, "S", 100, 2010))
+        runner.advance_time(100)
+        self.assertGreater(strat.book_count, 0)
+        runner.submit(7001, "B", 20, 2000, mog.SimOrderType.day_limit)
+        runner.advance_time(100)
+        runner.apply_external("B", 2000, 110)
+        runner.advance_time(100)
+        self.assertEqual(strat.fill_count, 1)
+
+
+class PhaseTwoInstitutionalFidelity(unittest.TestCase):
+    def test_almgren_chriss_dynamics(self):
+        cfg = mog.ImpactConfig()
+        self.assertGreater(cfg.gamma, 0.0)
+        self.assertGreater(cfg.eta, 0.0)
+
+        perm = mog.compute_permanent_impact(25_000.0, cfg)
+        temp = mog.compute_temporary_impact(5_000.0, 60.0, cfg)
+        self.assertGreater(perm, 0.0)
+        self.assertGreater(temp, 0.0)
+
+        traj = mog.compute_optimal_trajectory(100_000.0, 3600.0, 10, cfg)
+        self.assertEqual(len(traj), 11)
+        self.assertEqual(traj[0], 100_000.0)
+        cost = mog.compute_expected_shortfall(traj, 360.0, cfg)
+        self.assertGreater(cost, 0.0)
+
+    def test_ouch_protocol_framing(self):
+        self.assertEqual(mog.ouch_inbound_frame_length("O"), 49)
+        self.assertEqual(mog.ouch_inbound_frame_length("U"), 47)
+        self.assertEqual(mog.ouch_inbound_frame_length("X"), 19)
+        self.assertEqual(mog.ouch_outbound_frame_length("A"), 66)
+        self.assertEqual(mog.ouch_outbound_frame_length("E"), 40)
+        self.assertEqual(mog.ouch_outbound_frame_length("C"), 28)
+
+    def test_orchestrator_portfolio_extensions(self):
+        orch = mog.Orchestrator()
+        idx = orch.add_instrument(arena_capacity=1 << 16, lo_tick=0, hi_tick=10000, name="SPY")
+        orch.seed_external(idx, 1, "B", 100, 5000)
+        orch.seed_external(idx, 2, "S", 100, 5010)
+
+        self.assertEqual(orch.best_bid(idx), 5000)
+        self.assertEqual(orch.best_ask(idx), 5010)
+        self.assertEqual(orch.mid_price(idx), 5005.0)
+
+        orch.run_until_all(500)
+        self.assertEqual(orch.total_fill_count(), 0)
+        self.assertEqual(orch.total_filled_notional(), 0)
+
+
+class PhaseThreeFastDeterminism(unittest.TestCase):
+    def test_fast_digest_parity(self):
+        d1 = mog.FastDigest128()
+        d2 = mog.FastDigest128()
+        d1.update(b"FAST_HASH_PAYLOAD")
+        d2.update(b"FAST_HASH_PAYLOAD")
+        self.assertEqual(d1.finish_hex(), d2.finish_hex())
+
+        d_diff = mog.FastDigest128()
+        d_diff.update(b"FAST_HASH_PAYLOAD_DIFFERENT")
+        self.assertNotEqual(d1.finish_hex(), d_diff.finish_hex())
+
+    def test_determinism_digest_modes(self):
+        g = mog.DeterminismDigest(mog.DigestMode.golden)
+        f = mog.DeterminismDigest(mog.DigestMode.fast)
+        self.assertEqual(g.mode(), mog.DigestMode.golden)
+        self.assertEqual(f.mode(), mog.DigestMode.fast)
+
+        g.update(b"PAYLOAD")
+        f.update(b"PAYLOAD")
+        self.assertEqual(len(g.finish_sha256_hex()), 64)
+        self.assertEqual(len(f.finish_fast128_hex()), 32)
+
+
 if __name__ == "__main__":
     unittest.main()

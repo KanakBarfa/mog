@@ -117,3 +117,43 @@ add_executable(mog-strategy-e2e strategy_e2e.cpp)
 target_link_libraries(mog-strategy-e2e PRIVATE mog_flags mog_alloc Threads::Threads)
 add_test(NAME strategye2e COMMAND mog-strategy-e2e)
 set_tests_properties(strategye2e PROPERTIES TIMEOUT 120)
+
+add_executable(mog-arrow-e2e arrow_e2e.cpp)
+target_link_libraries(mog-arrow-e2e PRIVATE mog_flags mog_alloc)
+add_test(NAME arrowe2e COMMAND mog-arrow-e2e)
+set_tests_properties(arrowe2e PROPERTIES TIMEOUT 60)
+
+add_executable(mog-ouch-e2e ouch_e2e.cpp)
+target_link_libraries(mog-ouch-e2e PRIVATE mog_flags mog_alloc)
+add_test(NAME ouche2e COMMAND mog-ouch-e2e)
+set_tests_properties(ouche2e PROPERTIES TIMEOUT 60)
+
+add_executable(mog-impact-e2e impact_e2e.cpp)
+target_link_libraries(mog-impact-e2e PRIVATE mog_flags mog_alloc)
+add_test(NAME impacte2e COMMAND mog-impact-e2e)
+set_tests_properties(impacte2e PROPERTIES TIMEOUT 60)
+
+add_executable(mog-fast-digest-e2e fast_digest_e2e.cpp)
+target_link_libraries(mog-fast-digest-e2e PRIVATE mog_flags mog_alloc)
+add_test(NAME fastdigeste2e COMMAND mog-fast-digest-e2e)
+set_tests_properties(fastdigeste2e PROPERTIES TIMEOUT 60)
+
+add_executable(mog-vector-simd-e2e vector_simd_e2e.cpp)
+target_link_libraries(mog-vector-simd-e2e PRIVATE mog_flags mog_alloc)
+add_test(NAME vectorsimde2e COMMAND mog-vector-simd-e2e)
+set_tests_properties(vectorsimde2e PROPERTIES TIMEOUT 60)
+
+add_executable(mog-grid-runner-e2e grid_runner_e2e.cpp)
+target_link_libraries(mog-grid-runner-e2e PRIVATE mog_flags mog_alloc)
+add_test(NAME gridrunnere2e COMMAND mog-grid-runner-e2e)
+set_tests_properties(gridrunnere2e PROPERTIES TIMEOUT 60)
+
+add_executable(mog-pmu-e2e pmu_e2e.cpp)
+target_link_libraries(mog-pmu-e2e PRIVATE mog_flags mog_alloc)
+add_test(NAME pmue2e COMMAND mog-pmu-e2e)
+set_tests_properties(pmue2e PROPERTIES TIMEOUT 60)
+
+add_executable(mog-pcap-e2e pcap_e2e.cpp)
+target_link_libraries(mog-pcap-e2e PRIVATE mog_flags mog_alloc)
+add_test(NAME pcape2e COMMAND mog-pcap-e2e)
+set_tests_properties(pcape2e PROPERTIES TIMEOUT 60)

@@ -173,6 +173,12 @@ public:
     [[nodiscard]] bool in_band(std::int64_t tick) const noexcept {
         return bid_ladder_.in_band(tick);
     }
+    [[nodiscard]] std::int64_t next_price_below(Side s, std::int64_t tick) const noexcept {
+        return ladder_for(s).first_below(tick);
+    }
+    [[nodiscard]] std::int64_t next_price_above(Side s, std::int64_t tick) const noexcept {
+        return ladder_for(s).first_above(tick);
+    }
 
     // A first-touch at a new price claims a ladder page; refuse loudly when
     // the pool is spent instead of letting a compiled-out contract turn

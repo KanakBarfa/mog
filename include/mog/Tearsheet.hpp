@@ -208,12 +208,13 @@ struct Row {
         Markout m;
         m.horizon_ns = h;
         double acc = 0.0;
+        auto it = prints.begin();
         for (const Row& r : rows) {
             if (r.type != 'F' || r.price_ticks <= 0)
                 continue;
             const std::uint64_t target = r.ts_ns + static_cast<std::uint64_t>(h);
-            auto it = std::lower_bound(prints.begin(), prints.end(), target,
-                                       [](const Row* p, std::uint64_t t) { return p->ts_ns < t; });
+            it = std::lower_bound(it, prints.end(), target,
+                                  [](const Row* p, std::uint64_t t) { return p->ts_ns < t; });
             if (it == prints.end())
                 continue;
             const Row* next = *it;

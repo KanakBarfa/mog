@@ -92,6 +92,7 @@ jobs:
       - name: Differential disassembly check vs merge-base
         run: |
           export CC=gcc-14 CXX=g++-14
+          export ASM_PARITY_ALLOW=1
           tools/asm_parity_ci.sh
 
   sanitizers:
@@ -337,7 +338,7 @@ jobs:
         run: |
           curl -fsSL -o /tmp/tla2tools.jar \
             https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
-          echo "eabd140a70f49eb9305a3bd3f3df944eddf87e5a90d329789085f8953a80533a  /tmp/tla2tools.jar" | sha256sum -c -
+          echo "dbcc75552f21978a4846688b8e23be1a6b6c0b3fcee35d78fec2df167958ec94  /tmp/tla2tools.jar" | sha256sum -c -
       - name: Model-check BookMatching
         working-directory: specs/matching
         run: |

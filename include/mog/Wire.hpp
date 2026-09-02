@@ -51,6 +51,24 @@ inline std::uint64_t load_be64(const unsigned char* p) noexcept {
     return kHostIsLittle ? swap64(raw) : raw;
 }
 
+inline std::uint16_t load_le16(const unsigned char* p) noexcept {
+    std::uint16_t raw;
+    std::memcpy(&raw, p, sizeof(raw));
+    return kHostIsLittle ? raw : swap16(raw);
+}
+
+inline std::uint32_t load_le32(const unsigned char* p) noexcept {
+    std::uint32_t raw;
+    std::memcpy(&raw, p, sizeof(raw));
+    return kHostIsLittle ? raw : swap32(raw);
+}
+
+inline std::uint64_t load_le64(const unsigned char* p) noexcept {
+    std::uint64_t raw;
+    std::memcpy(&raw, p, sizeof(raw));
+    return kHostIsLittle ? raw : swap64(raw);
+}
+
 // ITCH 5.0 timestamps are 48-bit big-endian.
 inline std::uint64_t load_be48(const unsigned char* p) noexcept {
     std::uint64_t v = 0;

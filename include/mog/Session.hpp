@@ -48,11 +48,14 @@ struct NoiiSnapshot {
     std::int64_t reference_price_ticks = 0;
 };
 
+enum class CrossType : char { opening = 'O', closing = 'C', halt_ipo = 'H' };
+
 struct CrossRecord {
     std::uint32_t locate = 0;
     std::int64_t price_ticks = 0; // near reference price
     std::int64_t qty = 0;         // paired + |imbalance|
     char direction = '0';
+    CrossType type = CrossType::closing;
 };
 
 struct RegShoState {
@@ -74,6 +77,7 @@ public:
         case 'Q':
             phase_ = Phase::market_open;
             open_ts_ = ts_ns;
+            compute_open_cross();
             break;
         case 'M':
             phase_ = Phase::market_closed;
@@ -111,6 +115,7 @@ public:
                 for (const std::size_t idx : it->second)
                     if (windows_[idx].end_ns == 0)
                         windows_[idx].end_ns = ts_ns;
+                compute_halt_cross(locate);
             }
         }
         ++trading_actions_;
@@ -119,9 +124,7 @@ public:
     void on_noii(const NoiiSnapshot& snap) noexcept {
         latest_[snap.locate] = snap;
         // Zero-valued snapshots exist: NASDAQ clears imbalance state after
-        // each auction. They must not erase the last informative one - the
-        // close cross is computed from the latest snapshot that carried
-        // quantity.
+        // each auction. They must not erase the last informative one.
         if (snap.paired_shares > 0 || snap.imbalance_shares > 0)
             informative_[snap.locate] = snap;
         ++noii_updates_;
@@ -168,16 +171,21 @@ public:
         const auto it = latest_.find(locate);
         return it == latest_.end() ? nullptr : &it->second;
     }
+    [[nodiscard]] const std::vector<CrossRecord>& open_crosses() const noexcept {
+        return open_crosses_;
+    }
     [[nodiscard]] const std::vector<CrossRecord>& close_crosses() const noexcept {
-        return crosses_;
+        return close_crosses_;
+    }
+    [[nodiscard]] const std::vector<CrossRecord>& halt_crosses() const noexcept {
+        return halt_crosses_;
     }
 
 private:
-    void compute_close_cross() noexcept {
-        crosses_.clear();
-        // Deterministic output order: ascending stock locate.
+    void compute_open_cross() noexcept {
+        open_crosses_.clear();
         std::vector<std::uint32_t> keys;
-        keys.reserve(latest_.size());
+        keys.reserve(informative_.size());
         for (const auto& [locate, snap] : informative_)
             keys.push_back(locate);
         std::sort(keys.begin(), keys.end());
@@ -188,7 +196,41 @@ private:
             r.price_ticks = snap.near_price_ticks;
             r.qty = static_cast<std::int64_t>(snap.paired_shares + snap.imbalance_shares);
             r.direction = snap.direction;
-            crosses_.push_back(r);
+            r.type = CrossType::opening;
+            open_crosses_.push_back(r);
+        }
+    }
+
+    void compute_close_cross() noexcept {
+        close_crosses_.clear();
+        std::vector<std::uint32_t> keys;
+        keys.reserve(informative_.size());
+        for (const auto& [locate, snap] : informative_)
+            keys.push_back(locate);
+        std::sort(keys.begin(), keys.end());
+        for (const std::uint32_t locate : keys) {
+            const NoiiSnapshot& snap = informative_[locate];
+            CrossRecord r;
+            r.locate = locate;
+            r.price_ticks = snap.near_price_ticks;
+            r.qty = static_cast<std::int64_t>(snap.paired_shares + snap.imbalance_shares);
+            r.direction = snap.direction;
+            r.type = CrossType::closing;
+            close_crosses_.push_back(r);
+        }
+    }
+
+    void compute_halt_cross(std::uint32_t locate) noexcept {
+        const auto it = informative_.find(locate);
+        if (it != informative_.end()) {
+            const NoiiSnapshot& snap = it->second;
+            CrossRecord r;
+            r.locate = locate;
+            r.price_ticks = snap.near_price_ticks;
+            r.qty = static_cast<std::int64_t>(snap.paired_shares + snap.imbalance_shares);
+            r.direction = snap.direction;
+            r.type = CrossType::halt_ipo;
+            halt_crosses_.push_back(r);
         }
     }
 
@@ -201,7 +243,9 @@ private:
     std::uint64_t close_ts_ = 0;
     std::vector<HaltWindow> windows_;
     std::unordered_map<std::uint32_t, std::vector<std::size_t>> locate_to_windows_;
-    std::vector<CrossRecord> crosses_;
+    std::vector<CrossRecord> open_crosses_;
+    std::vector<CrossRecord> close_crosses_;
+    std::vector<CrossRecord> halt_crosses_;
     std::unordered_map<std::uint32_t, NoiiSnapshot> latest_;
     std::unordered_map<std::uint32_t, NoiiSnapshot> informative_;
     std::unordered_map<std::uint32_t, char> sho_;

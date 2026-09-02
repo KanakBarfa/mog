@@ -15,12 +15,15 @@ namespace mog {
 
 inline constexpr std::int64_t kNoTick = INT64_MAX;
 
-struct Level {
+struct alignas(32) Level {
     std::int64_t qty_total = 0;
     std::uint32_t head = kNullIndex;
     std::uint32_t tail = kNullIndex;
     std::uint32_t count = 0;
+    std::uint32_t pad_ = 0;
+    std::uint64_t reserved_ = 0;
 };
+static_assert(sizeof(Level) == 32);
 
 template <std::size_t kPageShift = 10>
 class PriceLadder {
@@ -43,16 +46,13 @@ public:
               ::operator new(pool_len_ * sizeof(Page), std::align_val_t{alignof(Page)}))) {
         MOG_PRE(cfg.lo_tick < cfg.hi_tick);
         MOG_PRE(cfg.page_pool > 0 && cfg.page_pool <= kNoPage);
-        // Pages are sticky: after this one-time construction sweep every page is
-        // pristine, and each op restores qty==0 / count==0 / null links on drain,
-        // so no reclaim or re-clear ever happens afterwards. The sweep must cover
-        // occupancy too: the pool is raw operator-new memory, so Page's default
-        // member initializers never run here.
+        // Zero-initialized pool; pages are sticky across drains and never re-cleared.
         for (std::size_t i = 0; i < dir_len_; ++i)
             dir_[i] = kNoPage;
         static constexpr Level kEmptyLevel{};
         for (std::size_t i = 0; i < pool_len_; ++i) {
             pages_[i].occupancy = 0;
+            pages_[i].summary_mask = 0;
             std::fill(pages_[i].mask.begin(), pages_[i].mask.end(), std::uint64_t{0});
             std::fill(pages_[i].levels.begin(), pages_[i].levels.end(), kEmptyLevel);
         }
@@ -104,11 +104,16 @@ public:
         const bool now_nonzero = lv.qty_total != 0;
         if (!was_nonzero && now_nonzero) {
             ++pages_[ps].occupancy;
-            pages_[ps].mask[offset >> 6] |= (std::uint64_t{1} << (offset & 63));
+            const std::size_t w = offset >> 6;
+            pages_[ps].mask[w] |= (std::uint64_t{1} << (offset & 63));
+            pages_[ps].summary_mask |= (std::uint64_t{1} << w);
         } else if (was_nonzero && !now_nonzero) {
             MOG_PRE(pages_[ps].occupancy > 0);
             --pages_[ps].occupancy;
-            pages_[ps].mask[offset >> 6] &= ~(std::uint64_t{1} << (offset & 63));
+            const std::size_t w = offset >> 6;
+            pages_[ps].mask[w] &= ~(std::uint64_t{1} << (offset & 63));
+            if (pages_[ps].mask[w] == 0)
+                pages_[ps].summary_mask &= ~(std::uint64_t{1} << w);
         }
         return &lv;
     }
@@ -145,12 +150,21 @@ public:
             const Page& p = pages_[ps];
             const std::size_t start_o = (d == d0) ? o0 : 0;
             const std::size_t w_start = start_o >> 6;
-            for (std::size_t w = w_start; w < kMaskWords; ++w) {
-                std::uint64_t m = p.mask[w];
-                if (w == w_start)
-                    m &= ~((std::uint64_t{1} << (start_o & 63)) - 1);
-                if (m != 0) {
-                    const std::size_t bit = static_cast<std::size_t>(std::countr_zero(m));
+
+            std::uint64_t m = p.mask[w_start] & ~((std::uint64_t{1} << (start_o & 63)) - 1);
+            if (m != 0) {
+                const std::size_t bit = static_cast<std::size_t>(std::countr_zero(m));
+                const std::size_t o = (w_start << 6) + bit;
+                return lo_ + (static_cast<std::int64_t>(d) << kPageShift) +
+                       static_cast<std::int64_t>(o);
+            }
+
+            if (w_start + 1 < kMaskWords) {
+                const std::uint64_t sum_m =
+                    p.summary_mask & ~((std::uint64_t{1} << (w_start + 1)) - 1);
+                if (sum_m != 0) {
+                    const std::size_t w = static_cast<std::size_t>(std::countr_zero(sum_m));
+                    const std::size_t bit = static_cast<std::size_t>(std::countr_zero(p.mask[w]));
                     const std::size_t o = (w << 6) + bit;
                     return lo_ + (static_cast<std::int64_t>(d) << kPageShift) +
                            static_cast<std::int64_t>(o);
@@ -174,15 +188,26 @@ public:
                 const Page& p = pages_[ps];
                 const std::size_t start_o = (d == d0) ? o0 : kPageTicks - 1;
                 const std::size_t w_start = start_o >> 6;
-                for (std::size_t w = w_start + 1; w-- > 0;) {
-                    std::uint64_t m = p.mask[w];
-                    if (w == w_start) {
-                        const std::size_t bit_pos = start_o & 63;
-                        m &= (bit_pos == 63) ? ~std::uint64_t{0}
-                                             : ((std::uint64_t{1} << (bit_pos + 1)) - 1);
-                    }
-                    if (m != 0) {
-                        const std::size_t bit = 63 - static_cast<std::size_t>(std::countl_zero(m));
+
+                const std::size_t bit_pos = start_o & 63;
+                const std::uint64_t top_mask =
+                    (bit_pos == 63) ? ~std::uint64_t{0} : ((std::uint64_t{1} << (bit_pos + 1)) - 1);
+                std::uint64_t m = p.mask[w_start] & top_mask;
+                if (m != 0) {
+                    const std::size_t bit = 63 - static_cast<std::size_t>(std::countl_zero(m));
+                    const std::size_t o = (w_start << 6) + bit;
+                    return lo_ + (static_cast<std::int64_t>(d) << kPageShift) +
+                           static_cast<std::int64_t>(o);
+                }
+
+                if (w_start > 0) {
+                    const std::uint64_t sum_m =
+                        p.summary_mask & ((std::uint64_t{1} << w_start) - 1);
+                    if (sum_m != 0) {
+                        const std::size_t w =
+                            63 - static_cast<std::size_t>(std::countl_zero(sum_m));
+                        const std::size_t bit =
+                            63 - static_cast<std::size_t>(std::countl_zero(p.mask[w]));
                         const std::size_t o = (w << 6) + bit;
                         return lo_ + (static_cast<std::int64_t>(d) << kPageShift) +
                                static_cast<std::int64_t>(o);
@@ -215,6 +240,7 @@ private:
 
     struct Page {
         std::uint32_t occupancy = 0;
+        std::uint64_t summary_mask = 0;
         std::array<std::uint64_t, kMaskWords> mask{};
         std::array<Level, kPageTicks> levels{};
     };

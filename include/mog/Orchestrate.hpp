@@ -91,6 +91,19 @@ public:
         return instruments_[at(idx)].sim->cancel_strategy(ref);
     }
 
+    [[nodiscard]] BookTick replace_strategy(std::size_t idx, OrderId orig, OrderId fresh, Qty qty,
+                                            Price price) noexcept {
+        return instruments_[at(idx)].sim->replace_strategy(orig, fresh, qty, price);
+    }
+
+    [[nodiscard]] std::int64_t queue_ahead_of(std::size_t idx, OrderId ref) const noexcept {
+        return instruments_[at(idx)].sim->queue_ahead_of(ref);
+    }
+
+    [[nodiscard]] std::size_t pending_decisions(std::size_t idx) const noexcept {
+        return instruments_[at(idx)].sim->pending_decisions();
+    }
+
     // ---- broadcast ops ----------------------------------------------------------
     // Ascending-index order is the determinism contract: identical op
     // sequences produce identical per-instrument RNG consumption regardless
@@ -105,8 +118,56 @@ public:
             inst.sim->advance_time(dt_ns);
     }
 
+    void run_until_all(std::uint64_t until_ts) {
+        for (auto& inst : instruments_)
+            inst.sim->run_until(until_ts);
+    }
+
+    // ---- top of book & pricing --------------------------------------------------
+    [[nodiscard]] std::int64_t best_bid(std::size_t idx) const noexcept {
+        return instruments_[at(idx)].sim->book().best_bid();
+    }
+
+    [[nodiscard]] std::int64_t best_ask(std::size_t idx) const noexcept {
+        return instruments_[at(idx)].sim->book().best_ask();
+    }
+
+    [[nodiscard]] double mid_price(std::size_t idx) const noexcept {
+        const auto b = best_bid(idx);
+        const auto a = best_ask(idx);
+        if (b == kNoTick || a == kNoTick)
+            return 0.0;
+        return static_cast<double>(b + a) / 2.0;
+    }
+
+    // ---- portfolio analytics ----------------------------------------------------
+    [[nodiscard]] std::uint64_t total_filled_notional() const noexcept {
+        std::uint64_t sum = 0;
+        for (const auto& inst : instruments_)
+            sum += inst.sim->total_filled_notional();
+        return sum;
+    }
+
+    [[nodiscard]] std::int64_t total_fees() const noexcept {
+        std::int64_t sum = 0;
+        for (const auto& inst : instruments_)
+            sum += inst.sim->total_fees();
+        return sum;
+    }
+
+    [[nodiscard]] std::size_t total_fill_count() const noexcept {
+        std::size_t sum = 0;
+        for (const auto& inst : instruments_)
+            sum += inst.sim->total_fill_count();
+        return sum;
+    }
+
     // ---- inspection ---------------------------------------------------------------
     [[nodiscard]] const ExecutionSimulator& sim(std::size_t idx) const noexcept {
+        return *instruments_[at(idx)].sim;
+    }
+
+    [[nodiscard]] ExecutionSimulator& sim(std::size_t idx) noexcept {
         return *instruments_[at(idx)].sim;
     }
 

@@ -99,7 +99,9 @@ public:
     StrategyRunner(SimConfig cfg, S strat) : sim_(cfg), strat_(std::move(strat)) {}
 
     [[nodiscard]] ExecutionSimulator& sim() noexcept { return sim_; }
+    [[nodiscard]] const ExecutionSimulator& sim() const noexcept { return sim_; }
     [[nodiscard]] S& strategy() noexcept { return strat_; }
+    [[nodiscard]] const S& strategy() const noexcept { return strat_; }
     [[nodiscard]] std::uint64_t now() const noexcept { return clock_; }
 
     // Submits an order at the current clock.
