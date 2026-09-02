@@ -126,6 +126,7 @@ public:
             st.specs.push_back(FieldSpec{std::string(fld.name), ct});
         });
         detail::field_widths<S>(st.widths);
+        st.col_pending.resize(st.specs.size());
         patch_count();
         return id;
     }
@@ -134,9 +135,11 @@ public:
     void append(std::uint32_t stream, const S& rec) {
         MOG_PRE(stream < streams_.size());
         Stream& st = streams_[stream];
+        std::size_t cfi = 0;
         detail::write_cols(rec, [&](const auto& v) {
             const auto* p = reinterpret_cast<const std::uint8_t*>(&v);
-            st.pending.insert(st.pending.end(), p, p + sizeof(v));
+            auto& col_buf = st.col_pending[cfi++];
+            col_buf.insert(col_buf.end(), p, p + sizeof(v));
         });
         ++st.rows;
     }
@@ -157,7 +160,7 @@ private:
     struct Stream {
         std::vector<FieldSpec> specs;
         std::vector<std::uint64_t> widths;
-        std::vector<std::uint8_t> pending; // field-major rows
+        std::vector<std::vector<std::uint8_t>> col_pending; // direct columnar buffers
         std::uint32_t rows = 0;
         std::uint64_t rows_total = 0;
     };
@@ -167,27 +170,15 @@ private:
         if (st.rows == 0)
             return;
         streams_sealed_ = true;
-        const std::size_t nf = st.specs.size();
-        std::uint64_t off = 0;
-        const std::uint64_t row_stride =
-            std::reduce(st.widths.begin(), st.widths.end(), std::uint64_t{0});
         put_u32(si);
         put_u32(st.rows);
-        std::vector<std::uint8_t> col_buf;
-        for (std::size_t cfi = 0; cfi < nf; ++cfi) {
-            const auto w = static_cast<std::size_t>(st.widths[cfi]);
-            const std::size_t col_bytes = w * st.rows;
-            col_buf.resize(col_bytes);
-            for (std::uint32_t r = 0; r < st.rows; ++r)
-                std::memcpy(col_buf.data() + static_cast<std::size_t>(r) * w,
-                            st.pending.data() + static_cast<std::size_t>(r) * row_stride + off, w);
-            std::fwrite(col_buf.data(), 1, col_bytes, f_);
-            bytes_written_ += col_bytes;
-            off += w;
+        for (auto& col_buf : st.col_pending) {
+            std::fwrite(col_buf.data(), 1, col_buf.size(), f_);
+            bytes_written_ += col_buf.size();
+            col_buf.clear();
         }
         st.rows_total += st.rows;
         st.rows = 0;
-        st.pending.clear();
     }
 
     void put_u32(std::uint32_t v) {
@@ -299,14 +290,16 @@ public:
         std::vector<char> buf;
         while (true) {
             std::uint32_t si = 0, rows = 0;
-            if (!peek(si, rows))
+            if (!get(si) || !get(rows))
                 break; // clean EOF
             if (si != stream || rows == 0) {
-                skip_group();
+                const auto sz = static_cast<long>(group_payload(si, rows));
+                if (sz > 0 && std::fseek(f_, sz, SEEK_CUR) != 0) {
+                    error_ = "truncated group";
+                    return false;
+                }
                 continue;
             }
-            (void)get(si);
-            (void)get(rows);
             const auto total = group_payload(stream, rows);
             buf.resize(static_cast<std::size_t>(total));
             if (!buf.empty() && std::fread(buf.data(), 1, buf.size(), f_) != buf.size()) {
@@ -377,12 +370,6 @@ private:
     template <class T>
     bool get(T& v) {
         return std::fread(&v, 1, sizeof(T), f_) == sizeof(T);
-    }
-    bool peek(std::uint32_t& si, std::uint32_t& rows) {
-        const long pos = std::ftell(f_);
-        const bool okg = get(si) && get(rows);
-        std::fseek(f_, pos, SEEK_SET);
-        return okg;
     }
 
     [[nodiscard]] static std::uint64_t width(ColumnType t) noexcept {

@@ -22,6 +22,7 @@ classifiers = [
 [project.optional-dependencies]
 # Optional output formats; the core shim stays dependency-free by design.
 parquet = ["pyarrow>=14"]
+docs = ["mkdocs>=1.5", "mkdocs-material>=9.5"]
 
 [tool.scikit-build]
 cmake.version = ">=3.28"

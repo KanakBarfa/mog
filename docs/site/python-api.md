@@ -75,7 +75,8 @@ Scripting:
 - `seed_external(ref, side, qty, px)` - rest background liquidity
 - `seed_iceberg(ref, side, px, display, total)`
 - `submit(ref, side, qty, px, type, arrival_ts)` - strategy order;
-  types are `mog.SimOrderType.day_limit`, `.ioc`, `.market`
+  types are `mog.SimOrderType.day_limit`, `.ioc`, `.market`,
+  `.midpoint_peg`, `.primary_peg`, `.market_peg`
 - `cancel_strategy(ref)`, `replace_strategy(orig, fresh, qty, px)`
 - `apply_external(side, px, qty)` - pressure against that resting side;
   consumes queue-first at and behind `px`
@@ -90,6 +91,26 @@ Inspection:
 - `trace_digest() -> str` - SHA-256 over fills+decisions; identical inputs
   give identical digests across languages and machines
 - `set_stp_mode(mog.StpMode...)`, `audit()`
+
+## Microstructure & Cross-Asset Metrics
+
+### `mog.compute_lead_lag(series1, series2, max_lag) -> LeadLagResult`
+
+Computes sub-window normalized Pearson cross-correlation across lag offsets
+$[-K, +K]$. `optimal_lag > 0` indicates series 1 leads series 2.
+
+### `mog.compute_hasbrouck_share(var1, var2, cov12) -> HasbrouckShare`
+
+Calculates bivariate Hasbrouck Information Share upper, lower, and midpoint
+bounds using Cholesky factor covariance matrix rotation.
+
+## Parquet & Arrow Export
+
+### `mog.to_parquet(obj, path, compression="zstd")`
+
+Exports columnar telemetry (`LogFile`, `ColumnLogReader`, `TradesSummary`,
+or PyArrow RecordBatches) directly to compressed Parquet files with zero
+intermediate CSV conversions.
 
 ## Time-travel debugging
 

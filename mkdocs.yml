@@ -1,50 +1,65 @@
-site_name: mog
+site_name: mog documentation
 site_description: Deterministic L3 limit-order-book backtesting engine
+site_url: https://kanakbarfa.github.io/mog/
 repo_url: https://github.com/KanakBarfa/mog
 repo_name: KanakBarfa/mog
-docs_dir: docs/site
-site_dir: build/docs
 
 theme:
   name: material
   palette:
-    - media: "(prefers-color-scheme: dark)"
-      scheme: slate
+    - scheme: default
+      primary: indigo
+      accent: indigo
       toggle:
-        icon: material/weather-night
-        name: switch to light
-    - media: "(prefers-color-scheme: light)"
-      scheme: default
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
       toggle:
-        icon: material/weather-sunny
-        name: switch to dark
+        icon: material/brightness-4
+        name: Switch to light mode
   features:
-    - content.code.copy
+    - navigation.indexes
     - navigation.sections
     - navigation.top
+    - search.suggest
     - search.highlight
-
-nav:
-  - Home: index.md
-  - Getting started: getting-started.md
-  - Examples: examples.md
-  - Python API: python-api.md
-  - Trust:
-      - Fidelity guide: fidelity-guide.md
-      - Model bias reference: model-bias-reference.md
-      - Benchmark methodology: benchmark-methodology.md
-  - Reference:
-      - Benchmarks: benchmarks.md
-      - Multi-instrument: multi-instrument.md
-      - Time-travel debugger: time-travel-debugger.md
-      - C++26 ledger explainer: cpp26-ledger-explainer.md
-      - Changelog: CHANGELOG.md
+    - content.code.copy
 
 markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
   - admonition
-  - pymdownx.superfences
-  - pymdownx.highlight
-  - toc:
-      permalink: true
+  - pymdownx.details
+  - attr_list
+  - tables
 
-strict: true
+docs_dir: docs/site
+
+nav:
+  - Overview: index.md
+  - Getting Started: getting-started.md
+  - Examples: examples.md
+  - Python API: python-api.md
+  - Multi-Instrument: multi-instrument.md
+  - Time Travel Debugger: time-travel-debugger.md
+  - Microstructure & Fidelity:
+      - Fidelity Guide: fidelity-guide.md
+      - Model Bias Reference: model-bias-reference.md
+      - C++26 Ledger Explainer: cpp26-ledger-explainer.md
+  - Benchmarks:
+      - Benchmark Results: benchmarks.md
+      - Methodology: benchmark-methodology.md
+  - Changelog: CHANGELOG.md

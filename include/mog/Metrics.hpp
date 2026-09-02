@@ -1,22 +1,20 @@
-// Strategy accounting and latency instrumentation.
-//
-// Accounting is deliberately dumb arithmetic over an explicit fill stream:
-// every number it produces can be recomputed by a third party from the same
-// logged fills, which is exactly what the M5 exit criterion demands.
-//
-// The histogram measures with rdtsc where available and exposes per-bucket
-// watermarks through atomic_ref::fetch_max, so a monitor thread can observe
-// maxima without locks or false sharing with the measuring core.
+// Strategy accounting, latency instrumentation, and cross-asset microstructure metrics.
 #pragma once
 
 #include <mog/Contracts.hpp>
+#include <mog/Types.hpp>
 #include <mog/polyfill/AtomicMinMax.hpp>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <bit>
+#include <chrono>
+#include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <span>
+#include <utility>
 #include <vector>
 
 #if defined(__x86_64__)
@@ -172,5 +170,112 @@ private:
     std::array<double, 3> sum_{};
     std::array<std::uint64_t, 3> n_{};
 };
+
+namespace metrics {
+
+struct LeadLagResult {
+    std::int64_t optimal_lag = 0;
+    double max_correlation = 0.0;
+    std::vector<double> correlations; // indexed by lag from -max_lag to +max_lag
+};
+
+struct HasbrouckShare {
+    double lower_bound_1 = 0.0;
+    double upper_bound_1 = 0.0;
+    double lower_bound_2 = 0.0;
+    double upper_bound_2 = 0.0;
+    double mid_share_1 = 0.0;
+    double mid_share_2 = 0.0;
+};
+
+inline LeadLagResult compute_lead_lag(std::span<const double> series1,
+                                      std::span<const double> series2,
+                                      std::size_t max_lag) noexcept {
+    const std::size_t n = std::min(series1.size(), series2.size());
+    if (n <= max_lag || max_lag == 0)
+        return {};
+
+    const std::size_t total_lags = 2 * max_lag + 1;
+    LeadLagResult result;
+    result.correlations.resize(total_lags, 0.0);
+
+    double best_corr = -1.0;
+    std::int64_t best_lag = 0;
+
+    for (std::int64_t lag = -static_cast<std::int64_t>(max_lag);
+         lag <= static_cast<std::int64_t>(max_lag); ++lag) {
+        double s1_sum = 0.0, s2_sum = 0.0;
+        std::size_t count = 0;
+        const std::size_t u_lag = static_cast<std::size_t>(std::abs(lag));
+        for (std::size_t i = 0; i + u_lag < n; ++i) {
+            const double val1 = (lag >= 0) ? series1[i] : series1[i + u_lag];
+            const double val2 = (lag >= 0) ? series2[i + u_lag] : series2[i];
+            s1_sum += val1;
+            s2_sum += val2;
+            ++count;
+        }
+        if (count == 0)
+            continue;
+        const double m1 = s1_sum / static_cast<double>(count);
+        const double m2 = s2_sum / static_cast<double>(count);
+        double cov = 0.0, v1 = 0.0, v2 = 0.0;
+        for (std::size_t i = 0; i + u_lag < n; ++i) {
+            const double val1 = (lag >= 0) ? series1[i] : series1[i + u_lag];
+            const double val2 = (lag >= 0) ? series2[i + u_lag] : series2[i];
+            const double d1 = val1 - m1;
+            const double d2 = val2 - m2;
+            cov += d1 * d2;
+            v1 += d1 * d1;
+            v2 += d2 * d2;
+        }
+        const double denom = std::sqrt(v1 * v2);
+        const double corr = (denom > 1e-18) ? (cov / denom) : 0.0;
+        const std::size_t idx = static_cast<std::size_t>(lag + static_cast<std::int64_t>(max_lag));
+        result.correlations[idx] = corr;
+
+        if (std::abs(corr) > best_corr) {
+            best_corr = std::abs(corr);
+            result.max_correlation = corr;
+            best_lag = lag;
+        }
+    }
+
+    result.optimal_lag = best_lag;
+    return result;
+}
+
+// Computes bivariate Hasbrouck Information Share bounds using Cholesky factor rotation.
+inline HasbrouckShare compute_hasbrouck_share(double var1, double var2, double cov12) noexcept {
+    const double det = var1 * var2 - cov12 * cov12;
+    if (det <= 0.0 || var1 <= 0.0 || var2 <= 0.0)
+        return {};
+
+    const double s11 = std::sqrt(var1);
+    const double s21 = cov12 / s11;
+    const double s22_sq = var2 - s21 * s21;
+    const double s22 = (s22_sq > 0.0) ? std::sqrt(s22_sq) : 0.0;
+
+    const double denom1 = (s11 - s21) * (s11 - s21) + s22 * s22;
+    const double share1_upper = (denom1 > 0.0) ? ((s11 - s21) * (s11 - s21) / denom1) : 0.5;
+
+    const double m22 = std::sqrt(var2);
+    const double m12 = cov12 / m22;
+    const double m11_sq = var1 - m12 * m12;
+    const double m11 = (m11_sq > 0.0) ? std::sqrt(m11_sq) : 0.0;
+
+    const double denom2 = m11 * m11 + (m22 - m12) * (m22 - m12);
+    const double share1_lower = (denom2 > 0.0) ? (m11 * m11 / denom2) : 0.5;
+
+    HasbrouckShare out;
+    out.lower_bound_1 = std::clamp(std::min(share1_lower, share1_upper), 0.0, 1.0);
+    out.upper_bound_1 = std::clamp(std::max(share1_lower, share1_upper), 0.0, 1.0);
+    out.lower_bound_2 = 1.0 - out.upper_bound_1;
+    out.upper_bound_2 = 1.0 - out.lower_bound_1;
+    out.mid_share_1 = 0.5 * (out.lower_bound_1 + out.upper_bound_1);
+    out.mid_share_2 = 0.5 * (out.lower_bound_2 + out.upper_bound_2);
+    return out;
+}
+
+} // namespace metrics
 
 } // namespace mog

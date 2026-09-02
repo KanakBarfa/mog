@@ -24,6 +24,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#ifndef MAP_POPULATE
+#define MAP_POPULATE 0
+#endif
+
 namespace mog::replay {
 
 enum class Format : std::uint8_t {

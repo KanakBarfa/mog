@@ -11,9 +11,8 @@ shared 11-byte big-endian header. Every wire offset is pinned by
 `static_assert` layout audits - drift fails the build. See `docs/PARSER.md`
 for the byte table.
 
-Not modeled at this layer: other ITCH types (trades are derivable from
-E/C; net-order-imbange indicators etc. are out of scope), moldudp framing,
-other venues' feeds.
+Framing formats supported: BinaryFILE, MoldUDP64, and zero-copy
+Ethernet-IPv4-UDP PCAP packet stream playback.
 
 ## The book: full depth-3 semantics
 
@@ -39,10 +38,15 @@ The simulator layers on the same book - there is no shadow book:
    level, each tracked order's units-ahead is recomputed by walking the real
    chain (scenario S9 pins stacked positions through sequential partial
    consumptions).
-3. Icebergs replenish display slices at the tail of the level under
+3. Pegged facilities (`midpoint_peg`, `primary_peg`, `market_peg`) dynamically
+   recalculate discrete limit tick prices on BBO changes while preserving
+   time priority behind displayed depth.
+4. Depth-decay power-law depletion models non-uniform cancellation intensity
+   away from the touch via $(1 + \text{level})^{-\alpha}$.
+5. Icebergs replenish display slices at the tail of the level under
    price-time priority (S10 verifies slice accounting by hand).
-4. Decisions inherit stable `(ts, seq)` ordering from the M3 scheduler.
-5. Every run folds into a SHA-256 trace digest; identical scripts give
+6. Decisions inherit stable `(ts, seq)` ordering from the M3 scheduler.
+7. Every run folds into a SHA-256 trace digest; identical scripts give
    identical digests across machines and languages.
 
 Specification and verification: `docs/FILLMODEL.md`; the statistical flow
@@ -53,7 +57,6 @@ driver and its assumptions are catalogued in
 
 | Not modeled | Why |
 |---|---|
-| Dark pools | venue property, not order property |
 | Multi-venue fragmentation/routing | belongs to a venue-graph layer that does not exist yet |
 | Hidden size inside displayed orders | no partial-display granularity for externals |
 | Regime switching / adverse-selection asymmetry | higher-order flow structure, future work |

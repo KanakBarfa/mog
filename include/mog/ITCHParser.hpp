@@ -86,9 +86,10 @@ namespace detail {
 // Accept/reject semantics must stay byte-identical to the Types.hpp reference codecs.
 
 [[nodiscard]] inline Header load_header(const unsigned char* p) noexcept {
+    const std::uint32_t lt = wire::load_be32(p + 1);
     return Header{
-        .locate = Locate{wire::load_be16(p + 1)},
-        .tracking = Tracking{wire::load_be16(p + 3)},
+        .locate = Locate{static_cast<std::uint16_t>(lt >> 16)},
+        .tracking = Tracking{static_cast<std::uint16_t>(lt & 0xFFFF)},
         .ts_ns = TimestampNs{wire::load_be48(p + 5)},
     };
 }
