@@ -50,7 +50,7 @@ throughput numbers are machine-local and meaningless without it.
   shared runners: a *consistent* red across reruns is signal; a single red
   on an unpinned runner warrants a rerun before diagnosis.
 
-## Current targets (PLAN §perf table)
+## Current targets & budgets
 
 Parser >50M msg/s and book replay >20M events/s are MET on the baseline
 host; tick-to-book latency targets are tracked but not yet CI-gated

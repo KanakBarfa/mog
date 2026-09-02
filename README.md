@@ -107,11 +107,11 @@ Four-way race on the scripted market-maker workload
 | mog (native C++) | 720,938 | yes |
 | hftbacktest (njit) | 1,258,662 | yes |
 | hftbacktest (python callbacks) | 387,433 | yes |
-| mog (python shim) | 11,742 | yes |
+| mog (python shim) | 61,122 | yes |
 | nautilus_trader | n/a | upstream assert (their bug, documented) |
 
 Honest reading: on this workload njit-compiled hftbacktest posts the
-highest number; mog's native arm leads its own python shim by ~60x and
+highest number; mog's native arm leads its own python shim by ~11.8x and
 beats callback-driven hftbacktest without any JIT warmup. Every arm was
 required to prove determinism before its number counted.
 

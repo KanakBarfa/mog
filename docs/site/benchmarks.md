@@ -12,13 +12,13 @@ Canonical 200k-op feed (132k market rows, 44k scripted actions):
 | participant | events/sec | self-deterministic |
 |---|---:|:---:|
 | hftbacktest 2.4.4, numba njit loop | **1,246,000** | yes |
-| **mog** native C++ (frontier) | **680,000** | yes |
+| **mog** native C++ (frontier) | **715,920** | yes |
 | hftbacktest 2.4.4, python-driven | 391,000 | yes |
 | nautilus_trader 1.231.0 (tick ingest baseline) | 133,000 | yes* |
-| mog python shim driver | 11,900 | yes |
+| mog python shim driver | **61,122** | yes |
 
 Stated plainly: their njit fast path replays faster than our engine -
-1.8x - because it does less per tick. Our number carries exact per-op
+1.7x - because it does less per tick. Our number carries exact per-op
 queue recomputation, conservation audits, decision pipelines, STP checks
 and SHA-256 trace hashing inline. Speed-with-proofs is the product; raw
 replay alone was never the claim.
