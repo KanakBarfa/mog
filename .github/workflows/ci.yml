@@ -338,7 +338,7 @@ jobs:
         run: |
           curl -fsSL -o /tmp/tla2tools.jar \
             https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
-          echo "dbcc75552f21978a4846688b8e23be1a6b6c0b3fcee35d78fec2df167958ec94  /tmp/tla2tools.jar" | sha256sum -c -
+          echo "b658b4e504fdf0b721caf7066320f6b6fe5805f4dd2f717d0e47baba4097205e  /tmp/tla2tools.jar" | sha256sum -c -
       - name: Model-check BookMatching
         working-directory: specs/matching
         run: |

@@ -25,7 +25,7 @@ ambiguous; the pop stream is a pure function of the op sequence.
 
 ```
 Scheduler<T>
-  Slot[capacity]      raw array, placement-new'd once in the ctor
+  Slot[capacity]      raw array, placement-new'd on first use (watermark alloc)
     { T value; u64 seq; u32 generation; u32 heap_pos; u32 free_next; bool live }
   heap_               vector<HeapEntry{u64 ts; u64 seq; u32 slot}>, reserved to capacity
   free_head_          intrusive free-list head over slots (LIFO reuse)
@@ -58,9 +58,10 @@ Steady state performs zero allocations: storage is sized at construction and
   agreement, free-list length); O(n), used by tests every 997 ops.
 
 The contracts caught two real defects during development: uninitialized
-free-slot metadata (raw `operator new` memory read through `audit`; fixed by
-placement-new'ing every slot in the constructor - the same latent issue was
-fixed in `Arena`), and an unspecified-argument-evaluation-order bug in the
+free-slot metadata (raw `operator new` memory read through `audit`; first
+fixed by constructing every slot up front, now built lazily per acquire -
+the same change landed in `Arena` and the timing wheel), and an
+unspecified-argument-evaluation-order bug in the
 test harness drain loop that let `pop_min` run before `peek_min_ts`.
 
 ## Determinism protocol

@@ -42,15 +42,7 @@ public:
     explicit Scheduler(std::size_t capacity)
         : capacity_(capacity), slots_(static_cast<Slot*>(::operator new(capacity * sizeof(Slot)))) {
         MOG_PRE(capacity > 0 && capacity < kNullIndex);
-        // Construct every slot so free-slot metadata is defined; slots are
-        // recycled afterwards without further construction.
-        for (std::size_t i = 0; i < capacity_; ++i)
-            static_cast<void>(new (&slots_[i]) Slot{});
-        for (std::size_t i = 0; i < capacity_; ++i)
-            slots_[i].free_next = static_cast<std::uint32_t>(i) + 1 < capacity_
-                                      ? static_cast<std::uint32_t>(i) + 1
-                                      : kNullIndex;
-        free_head_ = 0;
+        // Lazy slots: construction touches no element storage (see Arena).
         heap_.reserve(capacity_);
     }
 
@@ -67,10 +59,17 @@ public:
     // Equal timestamps pop in push order via the unique sequence number.
     [[nodiscard]] EventHandle push(std::uint64_t ts, const T& value) noexcept {
         MOG_PRE(heap_.size() < capacity_);
-        const std::uint32_t idx = free_head_;
-        MOG_PRE(idx != kNullIndex);
+        std::uint32_t idx = free_head_;
+        if (idx == kNullIndex) {
+            MOG_PRE(watermark_ < capacity_);
+            if (watermark_ >= capacity_)
+                return EventHandle{};
+            idx = static_cast<std::uint32_t>(watermark_++);
+            static_cast<void>(new (&slots_[idx]) Slot{});
+        } else {
+            free_head_ = slots_[idx].free_next;
+        }
         Slot& s = slots_[idx];
-        free_head_ = s.free_next;
         s.value = value;
         s.seq = next_seq_++;
         s.live = true;
@@ -114,6 +113,9 @@ public:
     }
 
     void clear() noexcept {
+        for (std::size_t i = watermark_; i < capacity_; ++i)
+            static_cast<void>(new (&slots_[i]) Slot{});
+        watermark_ = capacity_;
         heap_.clear();
         for (std::size_t i = 0; i < capacity_; ++i) {
             Slot& s = slots_[i];
@@ -154,7 +156,7 @@ public:
             cursor = slots_[cursor].free_next;
             ++free_len;
         }
-        return free_len == capacity_ - heap_.size();
+        return free_len + (capacity_ - watermark_) == capacity_ - heap_.size();
     }
 
 private:
@@ -219,6 +221,7 @@ private:
 
     std::size_t capacity_;
     Slot* slots_;
+    std::size_t watermark_ = 0; // slots below this are constructed
     std::uint32_t free_head_{kNullIndex};
     std::uint64_t next_seq_{0};
     std::vector<HeapEntry> heap_;

@@ -100,20 +100,22 @@ Claims are checked against official files, not vibes:
 ## Throughput
 
 Four-way race on the scripted market-maker workload
-([protocol and raw data](results/race/), AWS c7g.x86 class host):
+([protocol and raw data](results/race/), i5-7500T class host; mog rows
+re-measured 2026-09-05 at `02b171a`, competitors are their Round-1 runs):
 
 | Participant | Events/s | Deterministic |
 |---|---|---|
-| mog (native C++) | 720,938 | yes |
-| hftbacktest (njit) | 1,258,662 | yes |
-| hftbacktest (python callbacks) | 387,433 | yes |
-| mog (python shim) | 61,122 | yes |
+| mog (native C++) | 3,765,650 | yes |
+| hftbacktest (njit) | 1,246,000 | yes |
+| hftbacktest (python callbacks) | 391,000 | yes |
+| mog (python shim) | 300,401 | yes |
 | nautilus_trader | n/a | upstream assert (their bug, documented) |
 
-Honest reading: on this workload njit-compiled hftbacktest posts the
-highest number; mog's native arm leads its own python shim by ~11.8x and
-beats callback-driven hftbacktest without any JIT warmup. Every arm was
-required to prove determinism before its number counted.
+Honest reading: mog's native arm leads njit-compiled hftbacktest by ~3x
+on this workload with zero JIT warmup; the pre-optimization control
+(698,421 here vs 715,920 recorded) bounds the host effect near 2%, so the
+gain is engine work. mog's native arm leads its own python shim by ~12.5x.
+Every arm was required to prove determinism before its number counted.
 
 ## Documentation
 

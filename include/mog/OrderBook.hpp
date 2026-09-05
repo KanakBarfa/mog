@@ -138,6 +138,12 @@ public:
         return arena_.at(h).qty_remaining;
     }
 
+    // Probe-free remainder when the caller already holds a fresh handle.
+    [[nodiscard]] std::int64_t remaining_of_handle(OrderHandle h) const noexcept {
+        MOG_PRE(arena_.valid(h));
+        return arena_.at(h).qty_remaining;
+    }
+
     // Raw handle lookup for simulation layers that key side data by slot.
     [[nodiscard]] OrderHandle find_handle(OrderId ref) const noexcept { return id_find(ref.value); }
 
@@ -161,6 +167,20 @@ public:
         while (idx != kNullIndex) {
             const Order& o = arena_.at_index(idx);
             fn(OrderId{o.order_ref}, o.qty_remaining);
+            idx = o.next;
+        }
+    }
+
+    // Same walk plus the arena slot index; slot-keyed callers skip probing.
+    template <class Fn>
+    void for_each_in_level_idx(Side s, Price price, Fn&& fn) const {
+        const Level* lv = ladder_for(s).peek(price.ticks);
+        if (lv == nullptr)
+            return;
+        std::uint32_t idx = lv->head;
+        while (idx != kNullIndex) {
+            const Order& o = arena_.at_index(idx);
+            fn(idx, OrderId{o.order_ref}, o.qty_remaining);
             idx = o.next;
         }
     }
@@ -255,15 +275,17 @@ public:
         const Level* lv = ladder_for(s).peek(price.ticks);
         if (lv == nullptr || lv->head == kNullIndex)
             return tick_error(BookError::empty_level, 0);
-        const std::uint64_t head_ref = arena_.at_index(lv->head).order_ref;
-        // The handle above only reads order_ref; route through execute() so
-        // validation and contracts stay in one place.
-        const auto res = id_find_slot(head_ref);
-        MOG_CONTRACT_ASSERT(res.handle.index != kNullIndex);
+        // Head index in hand: no id-table probe; full-removal erase resolves by ref.
+        const std::uint32_t head_idx = lv->head;
+        const Order& head_o = arena_.at_index(head_idx);
+        const OrderHandle direct{head_idx, arena_.slot(head_idx).generation};
+#if MOG_CONTRACTS_DEFAULT_MODE != 2
+        const auto check = id_find_slot(head_o.order_ref);
+        MOG_CONTRACT_ASSERT(check.handle == direct);
+#endif
         if (victim != nullptr)
-            *victim = OrderId{head_ref};
-        return reduce(res.handle, arena_.at(res.handle), qty.units, BookEventKind::reduced, deltas,
-                      res.slot);
+            *victim = OrderId{head_o.order_ref};
+        return reduce(direct, arena_.at(direct), qty.units, BookEventKind::reduced, deltas);
     }
 
     [[nodiscard]] BookTick remove(OrderId ref,

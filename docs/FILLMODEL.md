@@ -24,17 +24,20 @@ On rest, a tracked order records `qty_ahead = qty_at(level) - own_qty`: every
 unit already at the price level is ahead of it, matching price-time priority.
 
 External flow applied at a level executes real FIFO heads sequentially
-(`execute_front`). Afterwards each tracked order at that level has its queue
-estimate decayed by the units consumed:
+(`execute_front`). Afterwards positions at that level are recomputed from
+the real FIFO chain, so every tracked order's units-ahead is exact again:
 
 ```
-qty_ahead -= min(qty_ahead, consumed_at_level)
+walk head-to-tail, accumulating remaining quantities ahead of each order
 ```
+
+New rests skip even that walk: the tail entry's ahead-count is the level
+total minus its own quantity.
 
 Guarantees:
 - Fills happen **only** when flow reaches the order itself (it becomes a FIFO
   head and is reduced). The model never invents quantity.
-- Estimates never go negative; decay truncates.
+- Positions never go negative; recomputation derives them from live remainders.
 - The tracker mirror equals book truth at every step; this is enforced as a
   boolean component of `audit()` so harnesses can report context instead of
   aborting.

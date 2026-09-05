@@ -221,10 +221,14 @@ struct Row {
         if (r.ts > prev_ts)
             sim.advance_time(r.ts - prev_ts);
         prev_ts = r.ts;
-        if (r.kind == "halt")
+        if (r.kind == "halt") {
             sim.set_halted(true);
-        else if (r.kind == "resume")
+            continue;
+        }
+        if (r.kind == "resume") {
             sim.set_halted(false);
+            continue;
+        }
         if (r.kind == "ext_add") {
             static_cast<void>(
                 sim.seed_external(OrderId{r.ref}, r.side == 'B' ? Side::buy : Side::sell,

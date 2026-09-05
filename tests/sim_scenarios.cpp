@@ -193,6 +193,24 @@ int main() {
         }
     }
 
+    // S15: STP decrement syncs the resting mirror and emits a maker report.
+    {
+        ExecutionSimulator sim(base_config());
+        sim.set_stp_mode(StpMode::decrement);
+        sim.submit(inbound(kExt + 80, Side::sell, 50, 1000, SimOrderType::day_limit), 0);
+        sim.drain();
+        sim.submit(inbound(kExt + 81, Side::buy, 30, 1000, SimOrderType::ioc), 10);
+        sim.drain();
+        CHECK(sim.book().remaining_of(OrderId{kExt + 80}) == 20);
+        CHECK(sim.audit());
+        CHECK(sim.reports().size() == 1);
+        if (!sim.reports().empty()) {
+            CHECK(sim.reports().front().ref == kExt + 80);
+            CHECK(sim.reports().front().qty == 30);
+        }
+        CHECK(sim.decisions().back().filled_qty == 30);
+    }
+
     // S6: replace moves to the tail of the new level; old tracker dies.
     {
         ExecutionSimulator sim(base_config());
@@ -282,6 +300,27 @@ int main() {
         }
         CHECK(t1_fills == 20);
         CHECK(t2_fills == 5);
+    }
+
+    // S14: cancels and replace-away settle mates left behind (T1/T2/T3 at 995).
+    {
+        ExecutionSimulator sim(base_config());
+        sim.submit(inbound(kExt + 70, Side::buy, 10, 995, SimOrderType::day_limit), 0);
+        sim.submit(inbound(kExt + 71, Side::buy, 20, 995, SimOrderType::day_limit), 1);
+        sim.submit(inbound(kExt + 72, Side::buy, 30, 995, SimOrderType::day_limit), 2);
+        sim.drain();
+        CHECK(sim.queue_ahead_of(OrderId{kExt + 70}) == 0);
+        CHECK(sim.queue_ahead_of(OrderId{kExt + 71}) == 10);
+        CHECK(sim.queue_ahead_of(OrderId{kExt + 72}) == 30);
+        CHECK(sim.cancel_strategy(OrderId{kExt + 70}));
+        CHECK(sim.queue_ahead_of(OrderId{kExt + 70}) == -1);
+        CHECK(sim.queue_ahead_of(OrderId{kExt + 71}) == 0);
+        CHECK(sim.queue_ahead_of(OrderId{kExt + 72}) == 20);
+        CHECK(
+            ok(sim.replace_strategy(OrderId{kExt + 71}, OrderId{kExt + 73}, Qty{20}, Price{996})));
+        CHECK(sim.queue_ahead_of(OrderId{kExt + 71}) == -1);
+        CHECK(sim.queue_ahead_of(OrderId{kExt + 72}) == 0);
+        CHECK(sim.queue_ahead_of(OrderId{kExt + 73}) == 0);
     }
 
     // S11: jitter shapes stay deterministic, non-negative, and bounded.

@@ -43,12 +43,16 @@ struct HashSink {
             h = mix(h, m.add_order.shares.units);
             h = mix(h, m.add_order.price.ticks);
             h = mix(h, mog::to_wire(m.add_order.side));
+            for (const char c : m.add_order.stock)
+                h = mix(h, static_cast<unsigned char>(c));
             break;
         case 'F':
             h = mix(h, m.add_order_attribution.order_ref.value);
             h = mix(h, m.add_order_attribution.shares.units);
             h = mix(h, m.add_order_attribution.price.ticks);
             h = mix(h, mog::to_wire(m.add_order_attribution.side));
+            for (const char c : m.add_order_attribution.stock)
+                h = mix(h, static_cast<unsigned char>(c));
             for (const char ch : m.add_order_attribution.attribution)
                 h = mix(h, static_cast<unsigned char>(ch));
             break;

@@ -30,7 +30,8 @@ class PriceLadder {
 public:
     static constexpr std::size_t kPageTicks = std::size_t{1} << kPageShift;
     static constexpr std::uint32_t kNoPage = UINT32_MAX;
-    static_assert(kPageShift >= 4 && kPageShift <= 20);
+    // summary_mask is one word: page shifts above 12 shift by 64 or more (UB).
+    static_assert(kPageShift >= 4 && kPageShift <= 12);
 
     struct Config {
         std::int64_t lo_tick;

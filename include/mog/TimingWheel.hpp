@@ -70,11 +70,9 @@ public:
     explicit TimingWheel(std::size_t capacity)
         : capacity_(capacity), slots_(static_cast<Slot*>(::operator new(capacity * sizeof(Slot)))) {
         MOG_PRE(capacity > 0 && capacity < kNullIndex);
-        for (std::size_t i = 0; i < capacity_; ++i)
-            static_cast<void>(new (&slots_[i]) Slot{});
+        // Lazy slots: construction touches no element storage (see Arena).
         for (Level& l : levels_)
             l.head.fill(kNullIndex), l.tail.fill(kNullIndex);
-        relink_free_list();
     }
 
     ~TimingWheel() { ::operator delete(slots_); }
@@ -90,10 +88,17 @@ public:
     [[nodiscard]] EventHandle push(std::uint64_t ts, const T& value) noexcept {
         MOG_PRE(live_ < capacity_);
         MOG_PRE(ts >= now_); // no scheduling into the past
-        const std::uint32_t idx = free_head_;
-        MOG_PRE(idx != kNullIndex);
+        std::uint32_t idx = free_head_;
+        if (idx == kNullIndex) {
+            MOG_PRE(watermark_ < capacity_);
+            if (watermark_ >= capacity_)
+                return EventHandle{};
+            idx = static_cast<std::uint32_t>(watermark_++);
+            static_cast<void>(new (&slots_[idx]) Slot{});
+        } else {
+            free_head_ = slots_[idx].free_next;
+        }
         Slot& s = slots_[idx];
-        free_head_ = s.free_next;
         s.value = value;
         s.ts = ts;
         s.seq = next_seq_;
@@ -141,6 +146,9 @@ public:
     }
 
     void clear() noexcept {
+        for (std::size_t i = watermark_; i < capacity_; ++i)
+            static_cast<void>(new (&slots_[i]) Slot{});
+        watermark_ = capacity_;
         for (std::size_t i = 0; i < capacity_; ++i) {
             Slot& s = slots_[i];
             if (s.live)
@@ -210,7 +218,7 @@ public:
             cursor = slots_[cursor].free_next;
             ++free_len;
         }
-        return free_len + seen == capacity_;
+        return free_len + (capacity_ - watermark_) + seen == capacity_;
     }
 
 private:
@@ -281,6 +289,9 @@ private:
     }
 
     void relink_free_list() noexcept {
+        for (std::size_t i = watermark_; i < capacity_; ++i)
+            static_cast<void>(new (&slots_[i]) Slot{});
+        watermark_ = capacity_;
         for (std::size_t i = 0; i < capacity_; ++i)
             slots_[i].free_next = static_cast<std::uint32_t>(i) + 1 < capacity_
                                       ? static_cast<std::uint32_t>(i) + 1
@@ -375,6 +386,7 @@ private:
 
     std::size_t capacity_;
     Slot* slots_;
+    std::size_t watermark_ = 0; // slots below this are constructed
     std::uint32_t free_head_{kNullIndex};
     std::size_t live_{0};
     std::uint64_t now_{0};

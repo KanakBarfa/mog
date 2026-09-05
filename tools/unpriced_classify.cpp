@@ -115,7 +115,7 @@ struct Classifier {
             const bool was_seen = t == 'E'
                                       ? seen.count(m.order_executed.order_ref.value) > 0
                                       : seen.count(m.order_executed_with_price.order_ref.value) > 0;
-            ++hist[tick.error * 2 + was_seen];
+            ++hist[std::min<std::size_t>(tick.error, 15) * 2 + was_seen];
             if (was_seen) {
                 const std::uint64_t r = t == 'E' ? m.order_executed.order_ref.value
                                                  : m.order_executed_with_price.order_ref.value;

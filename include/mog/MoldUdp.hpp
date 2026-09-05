@@ -124,15 +124,16 @@ parse_moldudp64(const unsigned char* buf, std::size_t len, Sink& sink) noexcept 
                 hdr.session.size() < kSessionSize ? hdr.session.size() : kSessionSize;
             for (std::size_t i = 0; i < n; ++i)
                 established_session[i] = hdr.session[i];
-        } else if (hdr.count != kHeartbeatCount && hdr.count != kEndSessionCount) {
+        } else if (hdr.count != kEndSessionCount) {
             const std::string_view est_view{established_session, kSessionSize};
             if (hdr.session != est_view) {
+                // Session failover restarts sequencing, even on heartbeats.
                 expected_seq = hdr.sequence;
                 const std::size_t n =
                     hdr.session.size() < kSessionSize ? hdr.session.size() : kSessionSize;
                 for (std::size_t i = 0; i < n; ++i)
                     established_session[i] = hdr.session[i];
-            } else if (hdr.sequence != expected_seq) {
+            } else if (hdr.sequence != expected_seq && hdr.count != kHeartbeatCount) {
                 return std::unexpected(ErrorInfo{
                     hdr.sequence > expected_seq ? Error::sequence_gap : Error::sequence_regression,
                     pkt_off, detail::make_gap(expected_seq, hdr.sequence, pkt_off, hdr.session)});

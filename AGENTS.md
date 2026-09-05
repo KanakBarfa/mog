@@ -38,6 +38,9 @@ Same for `build/frontier` with `-DMOG_PROFILE=frontier`.
 - The frontier profile enforces contracts (`MOG_PRE`) plus stricter warnings (`-Werror`, `-Wshadow`). Portable passing alone proves nothing: frontier has caught real bugs portable missed (band ceiling above INT32_MAX, shadowed test variable).
 - After touching `tools/` or `tests/python/`: run `pytest tests/python`. The wheel-level suite under `python/tests/` needs an installed wheel in a fresh venv.
 - `pre-commit run --all-files` must be green on every commit. Tool versions are pinned in lockstep across `.pre-commit-config.yaml` and `.github/workflows/lint.yml` (currently ruff 0.16.4, clang-format 21.1.8); bump all pins together.
+- Perf claims need A/B against a pristine `HEAD` worktree with its own build
+  dir (`cmake -S <worktree>`). Gate on Ir/op, latency percentiles, and
+  digest equality; wall time alone proves nothing.
 
 ## Layout map
 

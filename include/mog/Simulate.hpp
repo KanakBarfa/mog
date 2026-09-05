@@ -289,7 +289,7 @@ public:
         apply_depletion(Side::sell,
                         poisson(total_now(cfg_.bid_depletion_per_us + cfg_.ask_depletion_per_us) *
                                 (1.0 - bid_share)));
-        static_cast<void>(check_conservation());
+        static_cast<void>(conservation_ok());
     }
 
     [[nodiscard]] double flow_excitement() const noexcept { return excitement_; }
@@ -312,7 +312,11 @@ public:
         const BookTick t = book_.remove(ref);
         if (!ok(t))
             return false;
+        const Side rs = side_from_wire(tracked_[idx].side);
+        const Price rp{tracked_[idx].price_ticks};
         tracked_[idx].live = false;
+        // Mates behind the removed order move up by exactly its quantity.
+        recompute_positions(rs, rp);
         return true;
     }
 
@@ -353,12 +357,16 @@ public:
         if (side_c != 'B' && side_c != 'S')
             return BookTick{};
         inplace_vector<LevelDelta, 3>* no_deltas = nullptr;
+        const std::int64_t old_px = tracked_[idx].price_ticks;
         const BookTick t = book_.replace(orig, fresh, qty, price, no_deltas);
         if (!ok(t))
             return t;
         tracked_[idx].live = false;
         // A replace re-enters at the tail of the new level's queue.
         track_resting(fresh, side_from_wire(side_c), qty, price);
+        // Mates left on the old level move up when the levels differ.
+        if (old_px != price.ticks)
+            recompute_positions(side_from_wire(side_c), Price{old_px});
         return t;
     }
 
@@ -437,7 +445,8 @@ private:
         t.qty_remaining = qty.units;
         t.live = true;
         live_tracked_.push_back(static_cast<std::uint32_t>(h.index));
-        recompute_positions(s, price);
+        // Tail entry: ahead equals the level total minus our own quantity.
+        t.qty_ahead = book_.qty_at(s, price) - qty.units;
     }
 
     [[nodiscard]] std::uint64_t draw_jitter() noexcept {
@@ -591,9 +600,11 @@ private:
             if (head_ref == 0)
                 break;
             const OrderId head{head_ref};
-            const std::int64_t take = std::min(q - applied, book_.remaining_of(head));
+            const auto hh = book_.find_handle(head);
+            MOG_CONTRACT_ASSERT(hh.index != kNullIndex);
+            const std::int64_t take = std::min(q - applied, book_.remaining_of_handle(hh));
             MOG_CONTRACT_ASSERT(take > 0);
-            apply_to_head(s, head, price, take);
+            apply_to_head(s, head, price, take, hh);
             replenish_if_iceberg(head);
             applied += take;
         }
@@ -605,7 +616,7 @@ private:
             emit_trade(s, price, applied);
         }
         recompute_positions(s, price);
-        static_cast<void>(check_conservation());
+        static_cast<void>(conservation_ok());
     }
 
     // Executes take against a specific head, mirrors the tracker, and reports
@@ -613,9 +624,11 @@ private:
     // must be captured before the reduction: a fully-consumed order leaves
     // the id table during reduce(), so post-hoc lookups cannot see it.
     void reduce_and_sync(Side s, OrderId head, Price price, std::int64_t take,
-                         bool via_execute_front) {
-        const auto pre_idx = tracked_index_of(head);
-        OrderId victim{};
+                         bool via_execute_front, OrderHandle hh) {
+        const auto pre_idx =
+            (hh.index < tracked_.size() && tracked_[hh.index].live) ? hh.index : kNullIndex;
+        // Victim must echo the expected head, or the wrong tracker syncs.
+        OrderId victim = head;
         const BookTick tick = via_execute_front
                                   ? book_.execute_front(s, price, Qty{take}, nullptr, &victim)
                                   : book_.execute(head, Qty{take});
@@ -623,10 +636,11 @@ private:
         if (pre_idx == kNullIndex || victim.value != head.value)
             return;
         Tracked& t = tracked_[pre_idx];
-        if (book_.find_handle(head).index == mog::kNullIndex) {
+        // Zero remainder means the id entry left with the order.
+        const std::int64_t rem = book_.remaining_of(head);
+        if (rem == 0) {
             t.live = false; // consumed to zero; the id entry is already gone
         } else {
-            const std::int64_t rem = book_.remaining_of(head);
             t.qty_remaining = rem;
             t.qty_ahead = 0; // it was the FIFO head; nothing sits ahead of it
         }
@@ -657,8 +671,8 @@ private:
         icebergs_.pop_back();
     }
 
-    void apply_to_head(Side s, OrderId head, Price price, std::int64_t take) {
-        reduce_and_sync(s, head, price, take, /*via_execute_front*/ true);
+    void apply_to_head(Side s, OrderId head, Price price, std::int64_t take, OrderHandle hh) {
+        reduce_and_sync(s, head, price, take, /*via_execute_front*/ true, hh);
     }
 
     // Recomputes exact queue positions for every tracked order at a level by
@@ -666,10 +680,9 @@ private:
     // remaining quantities queued before it. No interleaving assumptions.
     void recompute_positions(Side s, Price price) noexcept {
         std::int64_t cum = 0;
-        book_.for_each_in_level(s, price, [&](OrderId ref, std::int64_t rem) {
-            const auto h = book_.find_handle(ref);
-            if (h.index != mog::kNullIndex && tracked_[h.index].live) {
-                tracked_[h.index].qty_ahead = cum;
+        book_.for_each_in_level_idx(s, price, [&](std::uint32_t idx, OrderId, std::int64_t rem) {
+            if (idx < tracked_.size() && tracked_[idx].live) {
+                tracked_[idx].qty_ahead = cum;
                 cum += rem;
             } else {
                 cum += rem;
@@ -677,15 +690,6 @@ private:
         });
         // Tracked orders that left this level (fully filled) keep ahead == 0
         // semantics through sync; nothing else to do here.
-    }
-
-    // Marks a known-removed order's tracker dead without relying on id
-    // lookup (the entry is gone by the time this runs).
-    void sync_tracker_after_removal(OrderId victim) noexcept {
-        const auto idx = tracked_index_of(victim);
-        if (idx == kNullIndex)
-            return;
-        tracked_[idx].live = false;
     }
 
     void emit_fill(std::size_t tracked_idx, std::int64_t price, std::int64_t qty,
@@ -734,6 +738,9 @@ private:
         const bool buy = in.side == Side::buy;
         const Side opp = buy ? Side::sell : Side::buy;
         inplace_vector<Price, 8> touched{};
+        // Overflow level for sweeps touching more levels than the buffer holds.
+        Price pending_overflow{};
+        bool has_pending_overflow = false;
         while (remaining > 0) {
             const std::int64_t h_best = best_hidden_price(opp);
             const std::int64_t touch = buy ? book_.best_ask() : book_.best_bid();
@@ -755,23 +762,26 @@ private:
             if (head_ref == 0)
                 break;
             const OrderId head{head_ref};
-            const std::int64_t head_rem = book_.remaining_of(head);
+            const auto hh = book_.find_handle(head);
+            MOG_CONTRACT_ASSERT(hh.index != kNullIndex);
+            const std::int64_t head_rem = book_.remaining_of_handle(hh);
+            const bool victim_tracked = hh.index < tracked_.size() && tracked_[hh.index].live;
 
             // STP applies per potential match against a tracked victim.
-            if (tracked_index_of(head) != kNullIndex && stp_ != StpMode::none) {
+            if (victim_tracked && stp_ != StpMode::none) {
                 if (stp_ == StpMode::cancel_newest) {
                     stp_stop = true;
                     return filled;
                 }
                 if (stp_ == StpMode::cancel_oldest) {
                     static_cast<void>(book_.remove(head));
-                    sync_tracker_after_removal(head);
+                    tracked_[hh.index].live = false;
                     recompute_positions(opp, Price{touch});
                     continue;
                 }
                 // decrement: both sides shrink by the mutual minimum.
                 const std::int64_t d = std::min({head_rem, remaining});
-                reduce_and_sync(opp, head, Price{touch}, d, /*via_execute_front*/ false);
+                reduce_and_sync(opp, head, Price{touch}, d, /*via_execute_front*/ false, hh);
                 replenish_if_iceberg(head);
                 notional += static_cast<std::uint64_t>(d) * static_cast<std::uint64_t>(touch);
                 filled += d;
@@ -785,9 +795,17 @@ private:
             for (const Price p : touched)
                 if (p.ticks == touch)
                     seen = true;
-            if (!seen && !touched.full())
-                touched.push_back(Price{touch});
-            apply_to_head(opp, head, Price{touch}, take);
+            if (!seen) {
+                if (!touched.full()) {
+                    touched.push_back(Price{touch});
+                } else {
+                    if (has_pending_overflow && pending_overflow.ticks != touch)
+                        recompute_positions(opp, pending_overflow);
+                    pending_overflow = Price{touch};
+                    has_pending_overflow = true;
+                }
+            }
+            apply_to_head(opp, head, Price{touch}, take, hh);
             replenish_if_iceberg(head);
             notional += static_cast<std::uint64_t>(take) * static_cast<std::uint64_t>(touch);
             filled += take;
@@ -798,6 +816,8 @@ private:
                 filled += tap_hidden(opp, Price{touch}, remaining, notional);
         }
         // Exact queue arithmetic for every level this sweep touched.
+        if (has_pending_overflow)
+            recompute_positions(opp, pending_overflow);
         for (const Price p : touched)
             recompute_positions(opp, p);
         notional_out = notional;
@@ -947,6 +967,12 @@ private:
     // stale entries are pruned in passing, so cost tracks live orders, not
     // configured capacity. (The race harness caught the original O(arena)
     // scan - a 2.6 ms/op tax on every mutation.)
+    // Unchecked profiles skip the per-mutation scan; audits still walk it.
+    [[nodiscard]] bool conservation_ok() const noexcept {
+        if (!::mog::contracts::active())
+            return true;
+        return check_conservation();
+    }
     [[nodiscard]] bool check_conservation() const noexcept {
         bool good = true;
         std::size_t w = 0;

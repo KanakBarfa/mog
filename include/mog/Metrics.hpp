@@ -132,21 +132,44 @@ private:
 class Markouts {
 public:
     static constexpr std::array<std::uint64_t, 3> kHorizons{1000, 10000, 100000};
+    static constexpr std::uint8_t kAllMeasured =
+        static_cast<std::uint8_t>((1u << kHorizons.size()) - 1);
 
     void add_mid(std::uint64_t ts_ns, std::int64_t doubled_mid) noexcept {
         mids_.push_back(Sample{ts_ns, doubled_mid});
+        // Resolve streaming fills whose horizons just arrived in order.
+        for (std::size_t i = 0; i < pending_.size();) {
+            Pending& p = pending_[i];
+            for (std::size_t h = 0; h < kHorizons.size(); ++h) {
+                if ((p.measured & (1u << h)) != 0)
+                    continue;
+                const auto* s = sample_at(p.ts + kHorizons[h]);
+                if (!s)
+                    continue;
+                accumulate(h, p.price, p.side, s->mid2);
+                p.measured |= static_cast<std::uint8_t>(1u << h);
+            }
+            if (p.measured == kAllMeasured) {
+                pending_[i] = pending_.back();
+                pending_.pop_back();
+            } else {
+                ++i;
+            }
+        }
     }
 
     void add_fill(std::uint64_t ts_ns, std::int64_t price_ticks, char side) noexcept {
+        std::uint8_t measured = 0;
         for (std::size_t i = 0; i < kHorizons.size(); ++i) {
             const auto* s = sample_at(ts_ns + kHorizons[i]);
             if (!s)
                 continue;
-            const double mo = side == 'B' ? static_cast<double>(s->mid2 / 2 - price_ticks)
-                                          : static_cast<double>(price_ticks - s->mid2 / 2);
-            sum_[i] += mo;
-            ++n_[i];
+            accumulate(i, price_ticks, side, s->mid2);
+            measured |= static_cast<std::uint8_t>(1u << i);
         }
+        // Horizons in the future stay pending until their mids stream in.
+        if (measured != kAllMeasured)
+            pending_.push_back(Pending{ts_ns, price_ticks, side, measured});
     }
 
     [[nodiscard]] double mean_markout(std::size_t h_idx) const noexcept {
@@ -159,6 +182,20 @@ private:
         std::uint64_t ts;
         std::int64_t mid2;
     };
+    struct Pending {
+        std::uint64_t ts;
+        std::int64_t price;
+        char side;
+        std::uint8_t measured;
+    };
+
+    void accumulate(std::size_t h, std::int64_t price_ticks, char side,
+                    std::int64_t mid2) noexcept {
+        const double mo = side == 'B' ? static_cast<double>(mid2 / 2 - price_ticks)
+                                      : static_cast<double>(price_ticks - mid2 / 2);
+        sum_[h] += mo;
+        ++n_[h];
+    }
 
     [[nodiscard]] const Sample* sample_at(std::uint64_t ts) const noexcept {
         auto it = std::lower_bound(mids_.begin(), mids_.end(), ts,
@@ -167,6 +204,7 @@ private:
     }
 
     std::vector<Sample> mids_;
+    std::vector<Pending> pending_; // fills with horizons not yet observed
     std::array<double, 3> sum_{};
     std::array<std::uint64_t, 3> n_{};
 };

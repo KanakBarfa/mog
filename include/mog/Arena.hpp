@@ -42,15 +42,7 @@ public:
         : capacity_(capacity), slots_(static_cast<Slot*>(::operator new(
                                    capacity * sizeof(Slot), std::align_val_t{kAlign}))) {
         MOG_PRE(capacity > 0 && capacity < kNullIndex);
-        // Construct every slot so free-slot metadata is defined; slots are
-        // recycled afterwards without further construction.
-        for (std::size_t i = 0; i < capacity_; ++i)
-            static_cast<void>(new (&slots_[i]) Slot{});
-        for (std::size_t i = 0; i < capacity_; ++i)
-            slots_[i].free_next = static_cast<std::uint32_t>(i) + 1 < capacity_
-                                      ? static_cast<std::uint32_t>(i) + 1
-                                      : kNullIndex;
-        free_head_ = capacity_ > 0 ? std::uint32_t{0} : kNullIndex;
+        // Lazy slots: built on first acquire in index order, matching the old order.
     }
 
     ~Arena() { ::operator delete(slots_, std::align_val_t{kAlign}); }
@@ -64,11 +56,16 @@ public:
     // Returns kNullHandle when exhausted; caller maps that to a recoverable error.
     template <class... Args>
     [[nodiscard]] Handle acquire(Args&&... args) noexcept {
-        if (free_head_ == kNullIndex)
-            return Handle{};
-        const std::uint32_t idx = free_head_;
+        std::uint32_t idx = free_head_;
+        if (idx == kNullIndex) {
+            if (watermark_ >= capacity_)
+                return Handle{};
+            idx = static_cast<std::uint32_t>(watermark_++);
+            static_cast<void>(new (&slots_[idx]) Slot{});
+        } else {
+            free_head_ = slots_[idx].free_next;
+        }
         Slot& s = slots_[idx];
-        free_head_ = s.free_next;
         s.live = true;
         ++live_;
         T* placed = &s.value;
@@ -120,6 +117,7 @@ public:
 private:
     std::size_t capacity_ = 0;
     std::size_t live_ = 0;
+    std::size_t watermark_ = 0; // slots below this are constructed
     std::uint32_t free_head_ = kNullIndex;
     Slot* slots_ = nullptr;
 };

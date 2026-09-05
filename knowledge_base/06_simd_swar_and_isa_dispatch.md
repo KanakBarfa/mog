@@ -44,8 +44,9 @@ mog solves this with **runtime dispatch**
    check happens once, not per message.
 
 The safety net: all kernels decode identically. Differential tests feed
-the same messages through every kernel and require bit-identical outputs
-(doctrine #4, chapter 00) - speed must never come with behavior changes.
+the same messages through every kernel on every session path and require
+bit-identical outputs (doctrine #4, chapter 00) - speed must never come
+with behavior changes.
 
 ## 4. The discipline that keeps it honest
 

@@ -88,7 +88,7 @@ inline void write_report(const char* kind, const char* file, int line, const cha
 } // namespace detail
 
 inline Mode current_mode() noexcept {
-    return static_cast<Mode>(detail::mode_word().load());
+    return static_cast<Mode>(detail::mode_word().load(std::memory_order_relaxed));
 }
 
 inline Mode set_mode(Mode mode) noexcept {
@@ -96,7 +96,7 @@ inline Mode set_mode(Mode mode) noexcept {
 }
 
 inline ViolationHandler current_handler() noexcept {
-    return detail::handler_word().load();
+    return detail::handler_word().load(std::memory_order_relaxed);
 }
 
 inline ViolationHandler set_handler(ViolationHandler handler) noexcept {
@@ -125,10 +125,12 @@ inline void violate(const char* kind, const char* file, int line, const char* ex
 // expressions on strict frontends (AppleClang errors via -Winvalid-
 // constexpr otherwise). violate() aborts, which is meaningless at compile
 // time anyway.
+// Default mode is only the default: set_mode() still flips at runtime, so
+// the gate is one relaxed load plus a cold violation path.
 #define MOG_CONTRACT_CHECK(cond, kind_str)                                                         \
     do {                                                                                           \
         if (!std::is_constant_evaluated()) {                                                       \
-            if (::mog::contracts::active() && !(cond)) {                                           \
+            if (::mog::contracts::active() && !(cond)) [[unlikely]] {                              \
                 ::mog::contracts::violate(kind_str, __FILE__, __LINE__, #cond);                    \
             }                                                                                      \
         }                                                                                          \
