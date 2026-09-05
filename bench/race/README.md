@@ -46,8 +46,8 @@ See `docs/site/benchmarks.md` for the table and methodology caveats.
 ```bash
 python bench/race/feedgen.py --ops 200000 --out bench/race/out --npy
 # build the native runner once:
-g++-15 -std=c++23 -O2 -march=native -DMOG_PROFILE_FRONTIER=1 \
-    -I include -I build/p23/generated \
+g++-15 -std=c++26 -O2 -march=native -DMOG_PROFILE_FRONTIER=1 \
+    -I include -I build/frontier/generated \
     bench/race/participants/mog_native.cpp -o bench/race/out/mog_native
 /path/to/race-venv/bin/python -m bench.race.run_race --runs 7 \
     # venv needs: hftbacktest nautilus_trader; MOG_PYLIB env or default path

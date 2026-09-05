@@ -148,6 +148,11 @@ target_link_libraries(mog-grid-runner-e2e PRIVATE mog_flags mog_alloc)
 add_test(NAME gridrunnere2e COMMAND mog-grid-runner-e2e)
 set_tests_properties(gridrunnere2e PROPERTIES TIMEOUT 60)
 
+add_executable(mog-ahead-e2e ahead_e2e.cpp)
+target_link_libraries(mog-ahead-e2e PRIVATE mog_flags mog_alloc)
+add_test(NAME aheade2e COMMAND mog-ahead-e2e)
+set_tests_properties(aheade2e PROPERTIES TIMEOUT 120)
+
 add_executable(mog-pmu-e2e pmu_e2e.cpp)
 target_link_libraries(mog-pmu-e2e PRIVATE mog_flags mog_alloc)
 add_test(NAME pmue2e COMMAND mog-pmu-e2e)

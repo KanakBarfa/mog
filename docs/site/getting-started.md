@@ -19,7 +19,7 @@ replay - either in C++ or through the Python shim.
 ```sh
 cmake -B build/frontier -G Ninja -DMOG_PROFILE=frontier   # native tuning
 cmake --build build/frontier -j
-ctest --test-dir build/frontier                           # 15 tests
+ctest --test-dir build/frontier                           # 30 tests
 ```
 
 Profiles:

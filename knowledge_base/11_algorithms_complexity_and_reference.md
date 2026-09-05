@@ -262,5 +262,7 @@ Wait-Free SPSC Lock-Free Ring    SpscRing.hpp                  O(1) wait-free (~
 Static ISA Replay Dispatch       ITCHParser.hpp, Replay.hpp    O(1) monomorphized inlined  O(1)         vtable / std::function
 64-Bit SWAR ASCII Normalizer     SWAR.hpp                      O(1) per 8 bytes (1 cycle)  O(1) regs    char-by-char loop
 Transposed Column Chunk Logger   ColumnLog.hpp                 O(R x F) memory, O(F) I/O   O(R x F)     Row-by-row fwrite
+Incremental Queue-Ahead Map      Simulate.hpp                  O(1) per tracked order      O(M) map     O(level) full FIFO walk
+Incremental Conservation Audit   Simulate.hpp                  O(dirty) amortized          O(dirty)     O(live) scan per mutation
 ========================================================================================================================
 ```

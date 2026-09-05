@@ -34,9 +34,10 @@ struct Summary {
     std::size_t maker_fills = 0;
     std::size_t taker_fills = 0;
     std::size_t prints = 0;
-    std::int64_t volume_ticks = 0;   // sum price*qty over all fills
-    std::int64_t fees_paid_cash = 0; // signed sum (rebates are credits)
-    std::uint64_t digest_high = 0;   // first 64 bits of the trace SHA-256
+    std::int64_t volume_ticks = 0;               // sum price*qty over all fills
+    std::int64_t fees_paid_cash = 0;             // signed sum (rebates are credits)
+    std::uint64_t digest_high = 0;               // first 64 bits of the mode-appropriate digest
+    DigestMode digest_mode = DigestMode::golden; // tier that produced digest_high
     std::vector<EventRecord> events;
 };
 
@@ -318,8 +319,14 @@ struct Row {
         }
     }
 
-    const auto dg = sim.trace_digest();
-    std::memcpy(&out.digest_high, dg.data(), sizeof(out.digest_high));
+    out.digest_mode = sim.digest_mode();
+    if (out.digest_mode == DigestMode::fast) {
+        const auto dg = sim.fast_trace_digest();
+        std::memcpy(&out.digest_high, dg.data(), sizeof(out.digest_high));
+    } else {
+        const auto dg = sim.trace_digest();
+        std::memcpy(&out.digest_high, dg.data(), sizeof(out.digest_high));
+    }
     return out;
 }
 

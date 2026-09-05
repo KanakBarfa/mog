@@ -32,11 +32,15 @@ Three details keep the number both exact and cheap:
 
 - A new rest joins at the FIFO tail, so its ahead-count is the level
   total minus its own quantity - O(1), no line walk.
+- Consumes maintain queue position incrementally via a sparse level map
+  subtracting taken volume directly from live tracked orders, avoiding
+  an O(level) walk per execution (with `recompute_positions` kept as
+  the exact-walk differential twin).
 - Cancels, replacements, and STP-decrement matches re-settle the mates
   left behind, including the resting side's own fill report; the
-  conservation audit fails loudly if mirror ever leaves book truth.
-- That audit walks every mutation in checking builds and is skipped
-  otherwise, so release replays pay one branch instead of a scan.
+  conservation audit verifies dirtied orders incrementally plus a full
+  sweep every 512 mutations to bound detection delay without walking the
+  entire live list per mutation.
 
 The rate at which volume ahead of you evaporates (**depletion**) is the
 difference between filling in seconds versus never; chapter 07's models

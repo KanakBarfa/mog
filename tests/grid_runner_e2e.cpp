@@ -63,6 +63,7 @@ void test_parallel_grid_runner() {
         cfg.book.ladder.hi_tick = 1'000'000;
         cfg.external_ref_limit = 1'000'000;
         cfg.maker_fee_bps = static_cast<std::int64_t>(i);
+        cfg.digest_mode = mog::DigestMode::fast; // sweep digests use the fast tier
         tasks.push_back(mog::GridTask{i, cfg});
     }
 

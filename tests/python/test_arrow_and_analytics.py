@@ -292,6 +292,57 @@ P,700,3,B,2005,50,0,2005,M
         self.assertEqual(len(fast_hex), 32)
         self.assertNotEqual(fast_hex, "0" * 32)
 
+    def test_parse_apply_parity(self):
+        data = mog.sample_corpus(
+            seed=0xBEEF, count=10_000, price_center=4_000_000, price_span=400_000
+        )
+
+        def fresh():
+            return mog.OrderBook(
+                arena_capacity=1 << 20, lo_tick=0, hi_tick=12_000_000, page_pool=64
+            )
+
+        a, b = fresh(), fresh()
+        n1 = mog.parse_itch(data, a.apply)
+        n2 = mog.parse_apply(data, b)
+        self.assertEqual(n1, n2)
+        self.assertEqual(a.best_bid(), b.best_bid())
+        self.assertEqual(a.best_ask(), b.best_ask())
+        self.assertEqual(a.l2(), b.l2())
+        c = fresh()
+        self.assertEqual(mog.parse_apply(data, c), n2)
+        self.assertEqual(c.l2(), b.l2())
+        with self.assertRaises(mog.MogParseError):
+            mog.parse_apply(data[:100], fresh())
+
+    def test_digest_mode_refusal_and_taint(self):
+        sim_fast = mog.ExecutionSimulator(lo_tick=0, hi_tick=10000, digest_mode=mog.DigestMode.fast)
+        sim_fast.seed_external(1, "S", 100, 2000)
+        sim_fast.submit(2, "B", 100, 2000, mog.SimOrderType.day_limit, 100)
+        sim_fast.drain()
+        with self.assertRaises(ValueError):
+            sim_fast.trace_digest()
+        self.assertEqual(len(sim_fast.fast_trace_digest()), 32)
+
+        sim_golden = mog.ExecutionSimulator(lo_tick=0, hi_tick=10000)
+        with self.assertRaises(ValueError):
+            sim_golden.fast_trace_digest()
+        self.assertEqual(len(sim_golden.trace_digest()), 64)
+
+        script = """kind,ts_ns,side,price_ticks,qty,ref
+ext_add,100,B,1998,400,11
+ext_add,100,S,2002,380,12
+strat_limit,150,B,1997,50,7001
+trade,250,S,1998,120,9101
+"""
+        fast_summary = mog.run_simrun_script(
+            script, lo_tick=0, hi_tick=10_000, digest_mode=mog.DigestMode.fast
+        )
+        self.assertEqual(fast_summary.digest_mode, mog.DigestMode.fast)
+        golden_summary = mog.run_simrun_script(script, lo_tick=0, hi_tick=10_000)
+        self.assertEqual(golden_summary.digest_mode, mog.DigestMode.golden)
+        self.assertNotEqual(fast_summary.digest_high, 0)
+
     def test_parquet_export(self):
         import os
         import tempfile

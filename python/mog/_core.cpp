@@ -118,6 +118,12 @@ struct PySink {
     void on_message(const Message& m) { fn(m); }
 };
 
+// Fused ingest sink: same per-message path as book.apply, no Python round trip.
+struct ApplySink {
+    OrderBook<>& book;
+    void on_message(const Message& m) { static_cast<void>(book.apply(m)); }
+};
+
 PriceLadder<>::Config ladder_config(std::int64_t lo, std::int64_t hi, std::size_t pool) {
     return PriceLadder<>::Config{lo, hi, pool};
 }
@@ -126,8 +132,19 @@ std::array<unsigned char, 32> digest_of(const ExecutionSimulator& sim) {
     return sim.trace_digest();
 }
 
-// Shared config assembly for ExecutionSimulator and TimeTravelSession so
-// both bindings accept identical constructor arguments and defaults.
+std::array<unsigned char, 16> fast_digest_of(const ExecutionSimulator& sim) {
+    return sim.fast_trace_digest();
+}
+
+// Pre-check the tier: a catchable error beats a dead interpreter.
+void require_digest_mode(const ExecutionSimulator& sim, DigestMode want) {
+    if (sim.digest_mode() != want)
+        throw std::invalid_argument(want == DigestMode::golden
+                                        ? "sim is fast mode; use fast_trace_digest()"
+                                        : "sim is golden mode; use trace_digest()");
+}
+
+// Shared config assembly for ExecutionSimulator and TimeTravelSession bindings.
 SimConfig make_sim_config(std::size_t arena_capacity, std::int64_t lo_tick, std::int64_t hi_tick,
                           std::size_t page_pool, std::size_t event_capacity, std::uint64_t seed,
                           double bid_depletion_per_us, double ask_depletion_per_us,
@@ -241,9 +258,16 @@ public:
         return runner_.sim().queue_ahead_of(OrderId{ref});
     }
     std::string trace_digest() const {
+        require_digest_mode(runner_.sim(), DigestMode::golden);
         char hex[65];
         static_cast<void>(Sha256::hex(digest_of(runner_.sim()), hex));
         return std::string(hex, 64);
+    }
+    std::string fast_trace_digest() const {
+        require_digest_mode(runner_.sim(), DigestMode::fast);
+        char hex[33];
+        static_cast<void>(FastDigest128::hex(fast_digest_of(runner_.sim()), hex));
+        return std::string(hex, 32);
     }
 
 private:
@@ -385,6 +409,24 @@ NB_MODULE(_core, m) {
         nb::arg("buf"), nb::arg("sink"),
         "Parse an ITCH capture, calling sink(Message) per record. "
         "Returns bytes consumed.");
+
+    m.def(
+        "parse_apply",
+        [](nb::bytes raw, OrderBook<>& book) {
+            ApplySink sink{book};
+            const auto* data = reinterpret_cast<const unsigned char*>(raw.c_str());
+            std::size_t consumed = 0;
+            {
+                nb::gil_scoped_release guard;
+                auto r = parse_itch(data, raw.size(), sink);
+                if (!r)
+                    throw MogParseError(r.error().offset, r.error().code);
+                consumed = *r;
+            }
+            return consumed;
+        },
+        nb::arg("buf"), nb::arg("book"),
+        "Parse ITCH into an order book without per-message Python round trips.");
 
     m.def(
         "trace_hash", [](const Message& x, std::uint64_t seed) { return trace_hash(x, seed); },
@@ -610,20 +652,22 @@ NB_MODULE(_core, m) {
         .def(
             "trace_digest",
             [](const ExecutionSimulator& s) {
+                require_digest_mode(s, DigestMode::golden);
                 char hex[65];
                 static_cast<void>(Sha256::hex(digest_of(s), hex));
                 return std::string(hex, 64);
             },
-            "SHA-256 over fills+decisions; deterministic given identical scripts.")
+            "SHA-256 over fills+decisions; golden mode only, see digest_mode().")
         .def(
             "fast_trace_digest",
             [](const ExecutionSimulator& s) {
-                const auto d = s.fast_trace_digest();
+                require_digest_mode(s, DigestMode::fast);
+                const auto d = fast_digest_of(s);
                 char hex[33];
                 static_cast<void>(FastDigest128::hex(d, hex));
                 return std::string(hex, 32);
             },
-            "128-bit fast vectorized trace digest.")
+            "128-bit fast vectorized trace digest; fast mode only, see digest_mode().")
         .def("digest_mode", [](const ExecutionSimulator& s) { return s.digest_mode(); })
         .def("set_stp_mode", [](ExecutionSimulator& s, StpMode mode) { s.set_stp_mode(mode); })
         .def("audit", [](const ExecutionSimulator& s) { return s.audit(); })
@@ -883,7 +927,9 @@ NB_MODULE(_core, m) {
                 static_cast<void>(Sha256::hex(d, hex));
                 return std::string(hex, 64);
             },
-            "SHA-256 fold over per-instrument digests in index order.")
+            "SHA-256 fold over per-instrument tier digests in index order.")
+        .def("global_digest_mode", &Orchestrator::global_digest_mode,
+             "Tier every instrument agreed on; taint for global_digest().")
         .def("audit", [](const Orchestrator& o) { return o.audit(); });
 
     // --- corpus generation -------------------------------------------------
@@ -1012,7 +1058,8 @@ NB_MODULE(_core, m) {
         .def_ro("prints", &simrun::Summary::prints)
         .def_ro("volume_ticks", &simrun::Summary::volume_ticks)
         .def_ro("fees_paid_cash", &simrun::Summary::fees_paid_cash)
-        .def_ro("digest_high", &simrun::Summary::digest_high);
+        .def_ro("digest_high", &simrun::Summary::digest_high)
+        .def_ro("digest_mode", &simrun::Summary::digest_mode);
 
     m.def(
         "run_simrun_script",
@@ -1024,13 +1071,13 @@ NB_MODULE(_core, m) {
            std::uint32_t decision_latency_ns, std::uint32_t wire_latency_ns,
            std::uint32_t jitter_max_ns, JitterKind jitter_kind, double jitter_mean_ns,
            double jitter_sigma_ns, std::uint64_t external_ref_limit, std::int64_t maker_fee_bps,
-           std::int64_t taker_fee_bps) -> simrun::Summary {
+           std::int64_t taker_fee_bps, DigestMode digest_mode) -> simrun::Summary {
             const SimConfig cfg = make_sim_config(
                 arena_capacity, lo_tick, hi_tick, page_pool, event_capacity, seed,
                 bid_depletion_per_us, ask_depletion_per_us, hawkes_kappa, hawkes_decay_ns,
                 momentum_gain, momentum_memory_ns, parse_latency_ns, decision_latency_ns,
                 wire_latency_ns, jitter_max_ns, jitter_kind, jitter_mean_ns, jitter_sigma_ns,
-                external_ref_limit, maker_fee_bps, taker_fee_bps);
+                external_ref_limit, maker_fee_bps, taker_fee_bps, digest_mode);
             auto r = simrun::run(script_text, cfg);
             if (!r)
                 throw std::runtime_error("failed to run simrun script");
@@ -1047,6 +1094,7 @@ NB_MODULE(_core, m) {
         nb::arg("jitter_kind") = JitterKind::none, nb::arg("jitter_mean_ns") = 0.0,
         nb::arg("jitter_sigma_ns") = 0.0, nb::arg("external_ref_limit") = std::uint64_t{1} << 62,
         nb::arg("maker_fee_bps") = 0, nb::arg("taker_fee_bps") = 0,
+        nb::arg("digest_mode") = DigestMode::golden,
         "Execute a deterministic simulation scenario script.");
 
     // --- strategy runner ---------------------------------------------------
@@ -1129,6 +1177,7 @@ NB_MODULE(_core, m) {
         .def("cancel_strategy", &DynamicStrategyRunner::cancel_strategy, nb::arg("ref"))
         .def("queue_ahead_of", &DynamicStrategyRunner::queue_ahead_of, nb::arg("ref"))
         .def("trace_digest", &DynamicStrategyRunner::trace_digest)
+        .def("fast_trace_digest", &DynamicStrategyRunner::fast_trace_digest)
         .def(
             "sim", [](DynamicStrategyRunner& r) -> ExecutionSimulator& { return r.sim(); },
             nb::rv_policy::reference_internal);
