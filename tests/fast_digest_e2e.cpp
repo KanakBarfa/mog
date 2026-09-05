@@ -1,12 +1,14 @@
-// Fast determinism digest E2E integration test: verifies 128-bit streaming hash,
-// avalanche properties, dual-tier DeterminismDigest, and simulator reproducibility.
+// FastDigest128 e2e tests: operations, bitflip sensitivity, dual-tier digest, reproducibility.
 #include <mog/Contracts.hpp>
 #include <mog/FastDigest.hpp>
+#include <mog/Orchestrate.hpp>
+#include <mog/SimRun.hpp>
 #include <mog/Simulate.hpp>
 
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <vector>
 
 namespace {
@@ -127,6 +129,107 @@ void test_execution_simulator_fast_digest_mode() {
     CHECK(sim_fast.fast_trace_digest() == sim_fast2.fast_trace_digest());
 }
 
+int g_violations = 0;
+void count_violation(const char*, const char*, int, const char*) noexcept {
+    ++g_violations;
+}
+
+mog::SimConfig tiny_config(mog::DigestMode mode) {
+    mog::SimConfig cfg{};
+    cfg.book.arena_capacity = 1 << 12;
+    cfg.book.ladder = {9000, 11000, 64};
+    cfg.external_ref_limit = 1000; // strategy refs (2001+) sit above this
+    cfg.digest_mode = mode;
+    return cfg;
+}
+
+void drive_tiny(mog::ExecutionSimulator& sim) {
+    CHECK(
+        ok(sim.seed_external(mog::OrderId{1}, mog::Side::sell, mog::Qty{100}, mog::Price{10000})));
+    const mog::SimInbound in{mog::OrderId{2001}, mog::Side::buy, mog::Qty{40}, mog::Price{10000},
+                             mog::SimOrderType::day_limit};
+    sim.submit(in, 100);
+    sim.advance_time(50);
+    sim.drain();
+}
+
+void test_fast_digest_variance() {
+    mog::ExecutionSimulator base(tiny_config(mog::DigestMode::fast));
+    drive_tiny(base);
+    mog::ExecutionSimulator other(tiny_config(mog::DigestMode::fast));
+    CHECK(ok(
+        other.seed_external(mog::OrderId{1}, mog::Side::sell, mog::Qty{100}, mog::Price{10000})));
+    const mog::SimInbound in{mog::OrderId{2001}, mog::Side::buy, mog::Qty{41}, mog::Price{10000},
+                             mog::SimOrderType::day_limit};
+    other.submit(in, 100);
+    other.advance_time(50);
+    other.drain();
+    CHECK(base.fast_trace_digest() != other.fast_trace_digest());
+}
+
+void test_wrong_mode_access_refused() {
+    // Observe mode makes refusal countable instead of aborting.
+    const auto prev_mode = mog::contracts::set_mode(mog::contracts::Mode::observe);
+    const auto prev_handler = mog::contracts::set_handler(count_violation);
+    g_violations = 0;
+    mog::ExecutionSimulator sim_fast(tiny_config(mog::DigestMode::fast));
+    mog::ExecutionSimulator sim_golden(tiny_config(mog::DigestMode::golden));
+    drive_tiny(sim_fast);
+    drive_tiny(sim_golden);
+    static_cast<void>(sim_fast.trace_digest());        // wrong tier
+    static_cast<void>(sim_golden.fast_trace_digest()); // wrong tier
+    CHECK(g_violations == 2);
+    static_cast<void>(sim_fast.fast_trace_digest()); // right tier
+    static_cast<void>(sim_golden.trace_digest());    // right tier
+    CHECK(g_violations == 2);
+    static_cast<void>(mog::contracts::set_handler(prev_handler));
+    static_cast<void>(mog::contracts::set_mode(prev_mode));
+}
+
+const std::string kTaintScript = "kind,ts_ns,side,price_ticks,qty,ref\n"
+                                 "ext_add,100,B,9900,100,1\n"
+                                 "ext_add,110,S,10100,100,2\n"
+                                 "strat_limit,150,B,10000,10,10\n"
+                                 "trade,200,S,10000,50,3\n";
+
+void test_simrun_fast_taint() {
+    mog::SimConfig fast = tiny_config(mog::DigestMode::fast);
+    mog::SimConfig golden = tiny_config(mog::DigestMode::golden);
+    const auto f1 = mog::simrun::run(kTaintScript, fast);
+    const auto f2 = mog::simrun::run(kTaintScript, fast);
+    const auto g = mog::simrun::run(kTaintScript, golden);
+    CHECK(f1.has_value() && f2.has_value() && g.has_value());
+    CHECK(f1->digest_mode == mog::DigestMode::fast);
+    CHECK(g->digest_mode == mog::DigestMode::golden);
+    CHECK(f1->digest_high == f2->digest_high);
+    CHECK(f1->digest_high != 0);
+    CHECK(f1->digest_high != g->digest_high);
+}
+
+void test_orchestrate_mode_uniformity() {
+    mog::Orchestrator a, b;
+    const std::size_t a0 = a.add_instrument(tiny_config(mog::DigestMode::fast), "A");
+    const std::size_t b0 = b.add_instrument(tiny_config(mog::DigestMode::fast), "A");
+    static_cast<void>(
+        a.seed_external(a0, mog::OrderId{1}, mog::Side::sell, mog::Qty{100}, mog::Price{10000}));
+    static_cast<void>(
+        b.seed_external(b0, mog::OrderId{1}, mog::Side::sell, mog::Qty{100}, mog::Price{10000}));
+    a.drain(a0);
+    b.drain(b0);
+    CHECK(a.global_digest_mode() == mog::DigestMode::fast);
+    CHECK(a.global_digest() == b.global_digest());
+    const auto prev_mode = mog::contracts::set_mode(mog::contracts::Mode::observe);
+    const auto prev_handler = mog::contracts::set_handler(count_violation);
+    g_violations = 0;
+    mog::Orchestrator m;
+    static_cast<void>(m.add_instrument(tiny_config(mog::DigestMode::golden), "G"));
+    static_cast<void>(m.add_instrument(tiny_config(mog::DigestMode::fast), "F"));
+    static_cast<void>(m.global_digest());
+    CHECK(g_violations >= 1);
+    static_cast<void>(mog::contracts::set_handler(prev_handler));
+    static_cast<void>(mog::contracts::set_mode(prev_mode));
+}
+
 } // namespace
 
 int main() {
@@ -134,5 +237,9 @@ int main() {
     test_fast_digest128_avalanche_properties();
     test_dual_tier_determinism_digest();
     test_execution_simulator_fast_digest_mode();
+    test_fast_digest_variance();
+    test_wrong_mode_access_refused();
+    test_simrun_fast_taint();
+    test_orchestrate_mode_uniformity();
     return 0;
 }

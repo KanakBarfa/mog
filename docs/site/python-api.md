@@ -24,6 +24,12 @@ Streams `data` through BinaryFILE framing; every decoded message goes to
 `sink(msg)`. Returns consumed byte count (always `len(data)` on success).
 Raises `mog.MogParseError` (`.offset` attribute) on malformed input.
 
+### `mog.parse_apply(data: bytes, book: OrderBook) -> int`
+
+Fused ingest: identical to `parse_itch(data, book.apply)` with no
+per-message Python round trip (~3.4x: 111 vs 382 ns/msg). Same code path
+per message, same errors. Releases the GIL during the parse.
+
 ### `mog.frame_length(type: str) -> int | None`
 
 Wire length of a message type; `None` for unknown types.
@@ -47,6 +53,9 @@ FNV-1a over a message for cheap stream fingerprinting.
 ### `mog.OrderBook(arena_capacity=1<<20, lo_tick, hi_tick, page_pool=512)`
 
 L3 price ladder with price/time priority and contract-checked bounds.
+Construction touches every pool page and table entry up front (~20 ms
+base plus ~40 ns per arena slot), so size both capacities to peak live
+load, not to the message count.
 
 | Method | Notes |
 |---|---|
@@ -89,7 +98,11 @@ Inspection:
   `decisions()`
 - `book()` - the underlying `OrderBook`
 - `trace_digest() -> str` - SHA-256 over fills+decisions; identical inputs
-  give identical digests across languages and machines
+  give identical digests across languages and machines. Golden mode only:
+  raises `ValueError` on a fast sim; check `digest_mode()` first
+- `fast_trace_digest() -> str` - 128-bit tier for sweeps (+14% throughput,
+  proof-overhead study); fast mode only, same `ValueError` discipline
+- `digest_mode() -> mog.DigestMode` - taint for the two calls above
 - `set_stp_mode(mog.StpMode...)`, `audit()`
 
 ## Microstructure & Cross-Asset Metrics

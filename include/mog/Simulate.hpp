@@ -3,6 +3,7 @@
 // See docs/FILLMODEL.md for the queue arithmetic.
 #pragma once
 
+#include <mog/Contracts.hpp>
 #include <mog/FastDigest.hpp>
 #include <mog/OrderBook.hpp>
 #include <mog/Reflect.hpp>
@@ -188,7 +189,10 @@ public:
 
     explicit ExecutionSimulator(SimConfig cfg)
         : cfg_(cfg), book_(cfg.book), wheel_(cfg.event_capacity), tracked_(cfg.book.arena_capacity),
-          trace_(cfg.digest_mode), rng_(cfg.seed) {}
+          trace_(cfg.digest_mode), rng_(cfg.seed) {
+        dirty_.reserve(64); // steady-state pushes never allocate
+        recent_sync_.reserve(32);
+    }
 
     [[nodiscard]] const BookT& book() const noexcept { return book_; }
     [[nodiscard]] const SimConfig& config() const noexcept { return cfg_; }
@@ -315,6 +319,8 @@ public:
         const Side rs = side_from_wire(tracked_[idx].side);
         const Price rp{tracked_[idx].price_ticks};
         tracked_[idx].live = false;
+        mark_dirty(idx);
+        unlink_tracked(idx);
         // Mates behind the removed order move up by exactly its quantity.
         recompute_positions(rs, rp);
         return true;
@@ -362,6 +368,8 @@ public:
         if (!ok(t))
             return t;
         tracked_[idx].live = false;
+        mark_dirty(idx);
+        unlink_tracked(idx);
         // A replace re-enters at the tail of the new level's queue.
         track_resting(fresh, side_from_wire(side_c), qty, price);
         // Mates left on the old level move up when the levels differ.
@@ -372,8 +380,7 @@ public:
 
     [[nodiscard]] std::size_t pending_decisions() const noexcept { return wheel_.size(); }
 
-    // Exact modeled units queued ahead of a strategy order at its level;
-    // -1 when the ref is not a live tracked order.
+    // Modeled units queued ahead of a strategy order at its level, or -1 if not live.
     [[nodiscard]] std::int64_t queue_ahead_of(OrderId ref) const noexcept {
         const auto idx = tracked_index_of(ref);
         return idx == kNullIndex ? -1 : tracked_[idx].qty_ahead;
@@ -382,26 +389,36 @@ public:
     [[nodiscard]] const std::vector<SimFillReport>& reports() const noexcept { return reports_; }
     [[nodiscard]] const std::vector<SimTrade>& trades() const noexcept { return trades_; }
     void clear_reports() noexcept { reports_.clear(); }
-    // Clears every queued event (fills, decisions, trade prints); used by
-    // StrategyRunner after pumping hooks.
+    // Clears queued events (fills, decisions, trade prints) after pumping hooks.
     void clear_events() noexcept {
         reports_.clear();
         decisions_.clear();
         trades_.clear();
     }
 
-    // Divergence accounting: naive assumes the whole order fills instantly at
-    // the touch price; the model fills what queue dynamics allow.
+    // Naive fill accounting assuming instant fills at touch price.
     [[nodiscard]] std::uint64_t naive_filled_total() const noexcept { return naive_filled_; }
     [[nodiscard]] std::uint64_t model_filled_total() const noexcept { return model_filled_; }
-    // Fills from active crossing only; the remainder of model_filled_ is
-    // passive (queue reached by external flow).
+    // Fills from active crossing only; remaining model fills are passive.
     [[nodiscard]] std::uint64_t aggressive_filled_total() const noexcept {
         return aggressive_filled_;
     }
 
     [[nodiscard]] bool audit() const noexcept {
+        const_cast<ExecutionSimulator*>(this)->recompute_all_tracked();
         return book_.audit() && wheel_.audit() && check_conservation();
+    }
+
+    // Exact-walk twin: re-derives every tracked ahead count for audits and tests.
+    void recompute_all_tracked() noexcept {
+        for (std::size_t m = 0; m < 2; ++m) {
+            const Side side = m == 0 ? Side::buy : Side::sell;
+            for (const auto& e : level_maps_[m])
+                if (e.occupied && e.count > 0)
+                    recompute_positions(side, Price{e.price});
+            for (const auto p : fallback_levels_[m])
+                recompute_positions(side, Price{p});
+        }
     }
 
 private:
@@ -412,6 +429,9 @@ private:
         std::int64_t qty_ahead = 0;     // exact units queued before us
         char side = 'B';
         bool live = false;
+        bool level_linked = false; // member of the level's tracked list
+        std::uint32_t level_next = kNullIndex;
+        std::uint32_t level_prev = kNullIndex;
     };
     struct Iceberg {
         std::uint64_t ref;
@@ -420,6 +440,15 @@ private:
         std::int64_t display;
         std::int64_t hidden;
     };
+    // Sparse per-level tracked membership; a full table degrades to exact walks.
+    struct TrackLevel {
+        std::int64_t price = 0;
+        std::uint32_t head = kNullIndex;
+        std::uint32_t count = 0;
+        bool occupied = false;
+    };
+    static constexpr std::size_t kLevelMapSize = 4096;
+    static constexpr std::size_t kLevelMapMask = kLevelMapSize - 1;
 
     [[nodiscard]] std::uint32_t iceberg_index_of(std::uint64_t ref) const noexcept {
         for (std::uint32_t i = 0; i < icebergs_.size(); ++i)
@@ -445,8 +474,10 @@ private:
         t.qty_remaining = qty.units;
         t.live = true;
         live_tracked_.push_back(static_cast<std::uint32_t>(h.index));
+        mark_dirty(h.index);
         // Tail entry: ahead equals the level total minus our own quantity.
         t.qty_ahead = book_.qty_at(s, price) - qty.units;
+        link_tracked(h.index, s, price.ticks);
     }
 
     [[nodiscard]] std::uint64_t draw_jitter() noexcept {
@@ -594,6 +625,9 @@ private:
     // invents quantity and cannot go negative.
     void consume_level(Side s, Price price, std::int64_t q) {
         const std::int64_t mid_before = mid_price();
+        recent_sync_.clear();
+        // Survivors lose exactly q ahead units; victims sync separately below.
+        subtract_level(s, price.ticks, q, false);
         std::int64_t applied = 0;
         while (applied < q) {
             const auto head_ref = book_.front_ref(s, price);
@@ -615,7 +649,6 @@ private:
             update_momentum(mid_before);
             emit_trade(s, price, applied);
         }
-        recompute_positions(s, price);
         static_cast<void>(conservation_ok());
     }
 
@@ -635,11 +668,14 @@ private:
         MOG_CONTRACT_ASSERT(ok(tick));
         if (pre_idx == kNullIndex || victim.value != head.value)
             return;
+        mark_dirty(pre_idx);
+        recent_sync_.push_back(pre_idx);
         Tracked& t = tracked_[pre_idx];
         // Zero remainder means the id entry left with the order.
         const std::int64_t rem = book_.remaining_of(head);
         if (rem == 0) {
             t.live = false; // consumed to zero; the id entry is already gone
+            unlink_tracked(pre_idx);
         } else {
             t.qty_remaining = rem;
             t.qty_ahead = 0; // it was the FIFO head; nothing sits ahead of it
@@ -738,9 +774,32 @@ private:
         const bool buy = in.side == Side::buy;
         const Side opp = buy ? Side::sell : Side::buy;
         inplace_vector<Price, 8> touched{};
+        inplace_vector<std::int64_t, 8> touched_take{};
         // Overflow level for sweeps touching more levels than the buffer holds.
         Price pending_overflow{};
+        std::int64_t pending_overflow_take = 0;
         bool has_pending_overflow = false;
+        recent_sync_.clear();
+        // Records per-level takes; the post-pass subtracts once per level.
+        const auto note_take = [&](Price touch, std::int64_t qty) {
+            for (std::size_t i = 0; i < touched.size(); ++i)
+                if (touched[i].ticks == touch.ticks) {
+                    touched_take[i] += qty;
+                    return;
+                }
+            if (!touched.full()) {
+                touched.push_back(touch);
+                touched_take.push_back(qty);
+                return;
+            }
+            if (has_pending_overflow && pending_overflow.ticks != touch.ticks)
+                subtract_level(opp, pending_overflow.ticks, pending_overflow_take, true);
+            pending_overflow = touch;
+            pending_overflow_take = has_pending_overflow && pending_overflow.ticks == touch.ticks
+                                        ? pending_overflow_take + qty
+                                        : qty;
+            has_pending_overflow = true;
+        };
         while (remaining > 0) {
             const std::int64_t h_best = best_hidden_price(opp);
             const std::int64_t touch = buy ? book_.best_ask() : book_.best_bid();
@@ -776,12 +835,15 @@ private:
                 if (stp_ == StpMode::cancel_oldest) {
                     static_cast<void>(book_.remove(head));
                     tracked_[hh.index].live = false;
-                    recompute_positions(opp, Price{touch});
+                    mark_dirty(hh.index);
+                    unlink_tracked(hh.index);
+                    note_take(Price{touch}, head_rem);
                     continue;
                 }
                 // decrement: both sides shrink by the mutual minimum.
                 const std::int64_t d = std::min({head_rem, remaining});
                 reduce_and_sync(opp, head, Price{touch}, d, /*via_execute_front*/ false, hh);
+                note_take(Price{touch}, d);
                 replenish_if_iceberg(head);
                 notional += static_cast<std::uint64_t>(d) * static_cast<std::uint64_t>(touch);
                 filled += d;
@@ -791,20 +853,7 @@ private:
 
             const std::int64_t take = std::min({remaining, head_rem});
             MOG_CONTRACT_ASSERT(take > 0);
-            bool seen = false;
-            for (const Price p : touched)
-                if (p.ticks == touch)
-                    seen = true;
-            if (!seen) {
-                if (!touched.full()) {
-                    touched.push_back(Price{touch});
-                } else {
-                    if (has_pending_overflow && pending_overflow.ticks != touch)
-                        recompute_positions(opp, pending_overflow);
-                    pending_overflow = Price{touch};
-                    has_pending_overflow = true;
-                }
-            }
+            note_take(Price{touch}, take);
             apply_to_head(opp, head, Price{touch}, take, hh);
             replenish_if_iceberg(head);
             notional += static_cast<std::uint64_t>(take) * static_cast<std::uint64_t>(touch);
@@ -815,11 +864,11 @@ private:
             if (remaining > 0)
                 filled += tap_hidden(opp, Price{touch}, remaining, notional);
         }
-        // Exact queue arithmetic for every level this sweep touched.
+        // Exact queue arithmetic per touched level, skipping mid-sweep synced orders.
         if (has_pending_overflow)
-            recompute_positions(opp, pending_overflow);
-        for (const Price p : touched)
-            recompute_positions(opp, p);
+            subtract_level(opp, pending_overflow.ticks, pending_overflow_take, true);
+        for (std::size_t i = 0; i < touched.size(); ++i)
+            subtract_level(opp, touched[i].ticks, touched_take[i], true);
         notional_out = notional;
         return filled;
     }
@@ -952,43 +1001,152 @@ private:
         trace_.update(&d.cancelled_qty, sizeof(d.cancelled_qty));
     }
 
-    // Records an observed external execution for the telemetry layer. Pure
-    // side output; the trace digest is untouched by design.
+    // Records an external execution for telemetry; trace digest is untouched.
     void emit_trade(Side s, Price price, std::int64_t qty) {
         SimTrade t{now_hint_, ++seq_counter_, price.ticks, static_cast<std::uint32_t>(qty),
                    static_cast<std::uint8_t>(s == Side::sell ? 1 : 0)};
         trades_.push_back(t);
     }
 
-    // Fill-conservation: tracked mirror must equal book truth for every live
-    // tracked order. Returns falseness instead of asserting so test harnesses
-    // can report context around the divergence.
-    // Walks the compact live list rather than the arena-sized tracker array:
-    // stale entries are pruned in passing, so cost tracks live orders, not
-    // configured capacity. (The race harness caught the original O(arena)
-    // scan - a 2.6 ms/op tax on every mutation.)
-    // Unchecked profiles skip the per-mutation scan; audits still walk it.
-    [[nodiscard]] bool conservation_ok() const noexcept {
-        if (!::mog::contracts::active())
+    // Dirty-only per-mutation checks plus a full walk every 512 bounds detection delay.
+    [[nodiscard]] bool verify_one(std::uint32_t i) const noexcept {
+        const Tracked& t = tracked_[i];
+        if (!t.live)
             return true;
-        return check_conservation();
+        const std::int64_t rem = book_.remaining_of(OrderId{t.ref});
+        return rem == t.qty_remaining && t.qty_ahead >= 0;
+    }
+    [[nodiscard]] bool conservation_ok() const noexcept {
+        if (!::mog::contracts::active()) {
+            dirty_.clear();
+            return true;
+        }
+        bool good = true;
+        for (const auto i : dirty_)
+            good = verify_one(i) && good;
+        dirty_.clear();
+        if (++conservation_checks_ % kConservationFullEvery == 0)
+            good = check_conservation() && good;
+        return good;
     }
     [[nodiscard]] bool check_conservation() const noexcept {
         bool good = true;
         std::size_t w = 0;
         for (std::size_t r = 0; r < live_tracked_.size(); ++r) {
             const auto i = live_tracked_[r];
-            const Tracked& t = tracked_[i];
-            if (!t.live)
-                continue;
-            live_tracked_[w++] = i;
-            const std::int64_t rem = book_.remaining_of(OrderId{t.ref});
-            if (rem != t.qty_remaining || t.qty_ahead < 0) {
-                good = false;
-            }
+            if (tracked_[i].live)
+                live_tracked_[w++] = i;
+            good = verify_one(i) && good;
         }
         live_tracked_.resize(w);
         return good;
+    }
+    // Marks a tracker for the next incremental check; skipped when contracts off.
+    void mark_dirty(std::uint32_t idx) const noexcept {
+        if (::mog::contracts::active())
+            dirty_.push_back(idx);
+    }
+
+    [[nodiscard]] static std::size_t level_side(Side s) noexcept { return s == Side::buy ? 0 : 1; }
+    [[nodiscard]] static std::size_t level_hash(std::int64_t price) noexcept {
+        std::uint64_t z = static_cast<std::uint64_t>(price) + 0x9e3779b97f4a7c15ULL;
+        z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+        z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+        return static_cast<std::size_t>((z ^ (z >> 31)) & kLevelMapMask);
+    }
+    // Finds a level entry without creating; null covers absent and fallback.
+    [[nodiscard]] TrackLevel* level_find(Side s, std::int64_t price) noexcept {
+        auto& map = level_maps_[level_side(s)];
+        const std::size_t h = level_hash(price);
+        for (std::size_t n = 0; n < kLevelMapSize; ++n) {
+            TrackLevel& e = map[(h + n) & kLevelMapMask];
+            if (!e.occupied)
+                return nullptr;
+            if (e.price == price)
+                return &e;
+        }
+        return nullptr;
+    }
+    // Finds or claims a level entry; null degrades the level to exact walks.
+    [[nodiscard]] TrackLevel* level_get(Side s, std::int64_t price) noexcept {
+        auto& map = level_maps_[level_side(s)];
+        const std::size_t h = level_hash(price);
+        TrackLevel* empty = nullptr;
+        for (std::size_t n = 0; n < kLevelMapSize; ++n) {
+            TrackLevel& e = map[(h + n) & kLevelMapMask];
+            if (e.occupied) {
+                if (e.price == price)
+                    return &e;
+            } else if (empty == nullptr) {
+                empty = &e;
+            }
+        }
+        if (empty == nullptr) {
+            fallback_levels_[level_side(s)].push_back(price);
+            return nullptr;
+        }
+        empty->occupied = true;
+        empty->price = price;
+        return empty;
+    }
+    [[nodiscard]] bool is_fallback_level(Side s, std::int64_t price) const noexcept {
+        for (const auto p : fallback_levels_[level_side(s)])
+            if (p == price)
+                return true;
+        return false;
+    }
+    // Head-inserts a tracked order; unlinked levels degrade to exact walks.
+    void link_tracked(std::uint32_t idx, Side s, std::int64_t price) noexcept {
+        TrackLevel* e = level_get(s, price);
+        if (e == nullptr)
+            return;
+        Tracked& t = tracked_[idx];
+        t.level_next = e->head;
+        t.level_prev = kNullIndex;
+        if (e->head != kNullIndex)
+            tracked_[e->head].level_prev = idx;
+        e->head = idx;
+        ++e->count;
+        t.level_linked = true;
+    }
+    void unlink_tracked(std::uint32_t idx) noexcept {
+        Tracked& t = tracked_[idx];
+        if (!t.level_linked)
+            return;
+        TrackLevel* e = level_find(side_from_wire(t.side), t.price_ticks);
+        t.level_linked = false;
+        if (e == nullptr)
+            return;
+        if (t.level_prev != kNullIndex)
+            tracked_[t.level_prev].level_next = t.level_next;
+        else
+            e->head = t.level_next;
+        if (t.level_next != kNullIndex)
+            tracked_[t.level_next].level_prev = t.level_prev;
+        if (e->count > 0)
+            --e->count;
+    }
+    // Subtracts takes from tracked members; exact walk fallback past map capacity.
+    void subtract_level(Side s, std::int64_t price, std::int64_t take, bool skip_synced) noexcept {
+        TrackLevel* e = level_find(s, price);
+        if (e == nullptr) {
+            if (is_fallback_level(s, price))
+                recompute_positions(s, Price{price});
+            return;
+        }
+        for (std::uint32_t i = e->head; i != kNullIndex; i = tracked_[i].level_next) {
+            if (skip_synced) {
+                bool synced = false;
+                for (const auto v : recent_sync_)
+                    if (v == i) {
+                        synced = true;
+                        break;
+                    }
+                if (synced)
+                    continue;
+            }
+            tracked_[i].qty_ahead -= take;
+        }
     }
 
 public:
@@ -1002,10 +1160,14 @@ public:
     [[nodiscard]] std::int64_t total_fees() const noexcept { return total_fees_; }
     [[nodiscard]] std::size_t total_fill_count() const noexcept { return fill_count_; }
     [[nodiscard]] DigestMode digest_mode() const noexcept { return cfg_.digest_mode; }
+    // Golden-only; wrong-tier access violates. Unchecked on portable: check digest_mode() first.
     [[nodiscard]] std::array<unsigned char, 32> trace_digest() const noexcept {
+        MOG_PRE(cfg_.digest_mode == DigestMode::golden);
         return trace_.finish_sha256();
     }
+    // Fast-only mirror.
     [[nodiscard]] std::array<unsigned char, 16> fast_trace_digest() const noexcept {
+        MOG_PRE(cfg_.digest_mode == DigestMode::fast);
         return trace_.finish_fast128();
     }
 
@@ -1014,9 +1176,15 @@ private:
     BookT book_;
     Scheduler<SimEvent> wheel_;
     std::vector<Tracked> tracked_; // indexed by arena slot
-    // Compact index of possibly-live tracker slots; pruned lazily by
-    // check_conservation so audits never scan configured capacity.
+    // Compact index of live tracker slots, pruned lazily by check_conservation.
     mutable std::vector<std::uint32_t> live_tracked_;
+    mutable std::vector<std::uint32_t> dirty_;
+    mutable std::uint64_t conservation_checks_ = 0;
+    static constexpr std::uint64_t kConservationFullEvery = 512;
+    // Two maps so Side need not join the key.
+    std::array<std::array<TrackLevel, kLevelMapSize>, 2> level_maps_{};
+    std::vector<std::int64_t> fallback_levels_[2]; // walked exactly, never linked
+    std::vector<std::uint32_t> recent_sync_;       // cross-path victim skip set
     std::vector<Iceberg> icebergs_;
     DeterminismDigest trace_{DigestMode::golden};
     std::mt19937_64 rng_;

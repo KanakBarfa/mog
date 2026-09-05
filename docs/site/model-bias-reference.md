@@ -46,7 +46,7 @@ good for.
 
 ## Verification posture
 
-Hand-computed scenario suite (S1–S14), boolean conservation audit exposed to
+Hand-computed scenario suite (S1-S15), boolean conservation audit exposed to
 harnesses instead of aborting, SHA-256 trace digests pinning every script,
 and differential tests against a reference book. See
 [Benchmark methodology](benchmark-methodology.md) for how perf claims are

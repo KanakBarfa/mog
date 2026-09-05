@@ -241,6 +241,14 @@ struct StreamArgs {
             cfg.maker_fee_bps = std::strtoll(argv[++i], nullptr, 10);
         } else if (a == "--taker-fee-bps" && need()) {
             cfg.taker_fee_bps = std::strtoll(argv[++i], nullptr, 10);
+        } else if (a == "--digest-mode" && need()) {
+            const std::string_view m = argv[++i];
+            if (m == "fast")
+                cfg.digest_mode = mog::DigestMode::fast;
+            else if (m == "golden")
+                cfg.digest_mode = mog::DigestMode::golden;
+            else
+                return std::unexpected(CliError::bad_number);
         } else if (a == "--events-csv" && need()) {
             events_out = argv[++i];
         } else if (a == "--json") {
@@ -282,10 +290,11 @@ struct StreamArgs {
     }
     std::printf("{\"script_rows\":%zu,\"fills\":%zu,\"prints\":%zu,"
                 "\"volume_ticks\":%lld,\"fees_cash\":%lld,\"digest_high\":"
-                "\"0x%016llx\",\"seed\":%llu}\n",
+                "\"0x%016llx\",\"digest_mode\":\"%s\",\"seed\":%llu}\n",
                 r.script_rows, r.fills, r.prints, static_cast<long long>(r.volume_ticks),
                 static_cast<long long>(r.fees_paid_cash),
                 static_cast<unsigned long long>(r.digest_high),
+                r.digest_mode == mog::DigestMode::fast ? "fast" : "golden",
                 static_cast<unsigned long long>(cfg.seed));
     return 0;
 }

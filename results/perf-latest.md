@@ -1,8 +1,8 @@
 # Performance Benchmark Summary (Frontier Profile)
 
 Measured 2026-09-05 on i5-7500T (4C, 6 MiB L3), g++-15, frontier profile
-(`-march=native`, `-O3`, `-DNDEBUG`, contract assertions enabled), commit
-`02b171a`. Prior record archived at `results/perf-20260825.md`.
+(`-march=native`, `-O3`, `-DNDEBUG`, contract assertions enabled). Prior record
+archived at `results/perf-20260825.md`.
 Competitor rows below are their Round-1 runs, unchanged and not re-run.
 
 ## 1. Google Benchmark Results
@@ -34,22 +34,21 @@ Competitor rows below are their Round-1 runs, unchanged and not re-run.
 
 ## 3. Four-Way Throughput Race
 
-Same 176,096-op canonical feed, same host class, median of 5 with cooldown:
+Same 176,096-op canonical feed, per-action drain in both mog harnesses,
+medians over repeated runs with cooldown (Round 5; the Round-4 end-drain
+numbers are retracted in `results/proof-overhead-20260905/CORRECTION.md`):
 
 | Participant | Throughput (ops/s) | Self-Deterministic |
 |---|---|---|
-| **mog (native C++, this record)** | **3,765,650** | yes (25,077 fills, identical) |
-| mog (native C++, `51f4faa` rebuilt here) | 698,421 | yes |
 | hftbacktest (njit baseline, Round 1) | 1,246,000 | yes |
 | hftbacktest (python-driven, Round 1) | 391,000 | yes |
-| **mog (python shim, this record)** | **300,401** | yes |
-| mog (python shim, Round 1) | 61,122 | yes |
+| **mog (native C++, golden digest, audits on)** | **2,281,000** | yes (28,257 fills) |
+| **mog (python shim)** | **590,000** | yes (28,257 fills) |
 | nautilus_trader (tick ingest, Round 1) | 133,000 | yes |
 
-Old-code control (698,421 here vs 715,920 recorded) bounds the host effect
-near 2%, so the 5.4x native gain and the lead over njit are from the engine
-work, not the machine. Competitors were not re-run; nothing in their code
-changed on our side to move them.
+Both mog arms agree per-order exactly (16,123/16,123, exact qty+price).
+Competitors were not re-run; nothing in their code changed on our side
+to move them.
 
 ## 4. Book Latency Percentiles
 

@@ -171,15 +171,28 @@ public:
         return *instruments_[at(idx)].sim;
     }
 
-    // Folds per-instrument trace digests in ascending index order. Empty
-    // portfolios fold to the SHA-256 of nothing, which is stable and useless.
+    // Folds per-tier digests in index order; uniform mode required, golden fold unchanged.
     [[nodiscard]] std::array<unsigned char, 32> global_digest() const noexcept {
         Sha256 fold{};
+        const DigestMode mode = global_digest_mode();
         for (const auto& inst : instruments_) {
-            const auto d = inst.sim->trace_digest();
-            fold.update(d.data(), d.size());
+            MOG_PRE(inst.sim->digest_mode() == mode);
+            if (mode == DigestMode::fast) {
+                const auto d = inst.sim->fast_trace_digest();
+                fold.update(d.data(), d.size());
+            } else {
+                const auto d = inst.sim->trace_digest();
+                fold.update(d.data(), d.size());
+            }
         }
         return fold.finish();
+    }
+
+    // Tier global_digest folded; golden when empty.
+    [[nodiscard]] DigestMode global_digest_mode() const noexcept {
+        if (instruments_.empty())
+            return DigestMode::golden;
+        return instruments_.front().sim->digest_mode();
     }
 
     [[nodiscard]] bool audit() const noexcept {

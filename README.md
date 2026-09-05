@@ -101,21 +101,27 @@ Claims are checked against official files, not vibes:
 
 Four-way race on the scripted market-maker workload
 ([protocol and raw data](results/race/), i5-7500T class host; mog rows
-re-measured 2026-09-05 at `02b171a`, competitors are their Round-1 runs):
+re-measured 2026-09-05, competitors are their Round-1 runs):
 
 | Participant | Events/s | Deterministic |
 |---|---|---|
-| mog (native C++) | 3,765,650 | yes |
+| mog (native C++, golden digest, audits on) | 2,281,000 | yes |
 | hftbacktest (njit) | 1,246,000 | yes |
 | hftbacktest (python callbacks) | 391,000 | yes |
-| mog (python shim) | 300,401 | yes |
+| mog (python shim) | 590,000 | yes |
 | nautilus_trader | n/a | upstream assert (their bug, documented) |
 
-Honest reading: mog's native arm leads njit-compiled hftbacktest by ~3x
-on this workload with zero JIT warmup; the pre-optimization control
-(698,421 here vs 715,920 recorded) bounds the host effect near 2%, so the
-gain is engine work. mog's native arm leads its own python shim by ~12.5x.
-Every arm was required to prove determinism before its number counted.
+Honest reading: mog's proofs-on arm leads njit-compiled hftbacktest by
+~1.8x on this workload with zero JIT warmup, at 2.28M events/s carrying
+exact per-op queue recomputation, conservation audits, decision
+pipelines, STP checks and SHA-256 trace hashing inline. The climb from
+164k took two internal passes (incremental conservation, incremental
+queue-ahead: RFC-003 A1/A2), each behavior-proven by per-order exact
+agreement and green anchors. Every arm proved determinism before its
+number counted, and both mog arms agree per-order exactly (16,123
+orders, exact qty+price). An earlier 3.7M mog number measured an
+end-of-run drain cadence that never let quotes rest intraday; it is
+retracted in the correction note, not hidden.
 
 ## Documentation
 

@@ -260,11 +260,21 @@ public:
         out << "cursor: " << cursor_ << "\n";
         out << "seed: " << cfg_.seed << "\n";
         out << "stp: " << static_cast<int>(sim_->stp_mode()) << "\n";
-        const auto digest = sim_->trace_digest();
-        out << "trace: ";
-        for (const unsigned char b : digest)
-            out << hex_digit(b >> 4) << hex_digit(b & 0xF);
-        out << "\n";
+        // Golden path byte-identical; fast path adds its taint line.
+        if (sim_->digest_mode() == mog::DigestMode::fast) {
+            out << "digest_mode: fast\n";
+            const auto digest = sim_->fast_trace_digest();
+            out << "trace: ";
+            for (const unsigned char b : digest)
+                out << hex_digit(b >> 4) << hex_digit(b & 0xF);
+            out << "\n";
+        } else {
+            const auto digest = sim_->trace_digest();
+            out << "trace: ";
+            for (const unsigned char b : digest)
+                out << hex_digit(b >> 4) << hex_digit(b & 0xF);
+            out << "\n";
+        }
 
         out << "## timeline\n";
         for (std::size_t i = 0; i < log_.size(); ++i)
