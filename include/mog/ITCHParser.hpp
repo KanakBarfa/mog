@@ -536,8 +536,13 @@ template <MessageSink Sink, typename SkipListener>
     requires requires(SkipListener l, char t, const unsigned char* p, std::size_t n) { l(t, p, n); }
 [[nodiscard]] inline std::expected<SessionStats, ParseError>
 parse_itch_session_listen_as(const unsigned char* buf, std::size_t len, Sink& sink,
-                             const KernelTable&, SkipListener& listen) noexcept {
-    return parse_itch_session_listen(buf, len, sink, listen);
+                             const KernelTable& kernels, SkipListener& listen) noexcept {
+    // Honor the caller's kernel table so differential tests really pin the ISA.
+    if (kernels.parse_one == &detail::parse_one_thunk<Isa::avx512>)
+        return parse_itch_session_listen_isa<Isa::avx512>(buf, len, sink, listen);
+    if (kernels.parse_one == &detail::parse_one_thunk<Isa::avx2>)
+        return parse_itch_session_listen_isa<Isa::avx2>(buf, len, sink, listen);
+    return parse_itch_session_listen_isa<Isa::sse4_baseline>(buf, len, sink, listen);
 }
 
 } // namespace mog

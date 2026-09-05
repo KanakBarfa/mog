@@ -235,6 +235,7 @@ inline Token make_token(std::string_view s) noexcept {
     return tok;
 }
 
+// 14-digit zero-padded decimal; refs >= 1e14 truncate and cannot round-trip.
 inline Token token_from_id(std::uint64_t id) noexcept {
     char buf[16];
     const int n = std::snprintf(buf, sizeof(buf), "%014llu", static_cast<unsigned long long>(id));
@@ -529,16 +530,23 @@ public:
         for (std::size_t i = 0; i <= mask_; ++i) {
             std::size_t pos = (idx + i) & mask_;
             if (slots_[pos].ref == ref) {
-                slots_[pos].ref = 0;
-                --size_;
-                std::size_t j = (pos + 1) & mask_;
-                while (slots_[j].ref != 0) {
-                    Slot move_slot = slots_[j];
-                    slots_[j].ref = 0;
-                    --size_;
-                    insert_or_assign(move_slot.ref, move_slot.meta);
-                    j = (j + 1) & mask_;
+                // Knuth Algorithm R: backward-shift deletion, no reinsertion.
+                std::size_t hole = pos;
+                std::size_t scan = hole;
+                for (;;) {
+                    scan = (scan + 1) & mask_;
+                    if (slots_[scan].ref == 0)
+                        break;
+                    const std::size_t home = hash(slots_[scan].ref) & mask_;
+                    const bool home_in_gap =
+                        hole < scan ? (home > hole && home <= scan) : (home > hole || home <= scan);
+                    if (!home_in_gap) {
+                        slots_[hole] = slots_[scan];
+                        hole = scan;
+                    }
                 }
+                slots_[hole].ref = 0;
+                --size_;
                 return;
             }
             if (slots_[pos].ref == 0)

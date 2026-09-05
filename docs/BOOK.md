@@ -191,6 +191,7 @@ can fail on integer deltas rather than noisy timings.
 | Slim return (16B BookTick, lazy deltas) | 220 | n/a (intermediate) |
 | Interleaved id entries + Fibonacci hash | 199 | 98.5 ns |
 | Fused ladder walk in reduce, single slot load in remove | **189** | 103 ns (same noise band) |
+| Lazy slot alloc, probeless FIFO-head match, slot-indexed walks | **193** | neutral (see `results/perf-latest.md`) |
 
 The fused walk removed the duplicate band-check and directory traversal
 between peek and apply; sticky pages make the returned level valid for the

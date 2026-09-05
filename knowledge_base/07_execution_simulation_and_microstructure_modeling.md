@@ -28,6 +28,16 @@ it watched every add/cancel/execute since the line formed (that is what
 L3 data buys you). No "assume you get filled if price touches" hand-waving:
 queue position is a number, maintained tick by tick.
 
+Three details keep the number both exact and cheap:
+
+- A new rest joins at the FIFO tail, so its ahead-count is the level
+  total minus its own quantity - O(1), no line walk.
+- Cancels, replacements, and STP-decrement matches re-settle the mates
+  left behind, including the resting side's own fill report; the
+  conservation audit fails loudly if mirror ever leaves book truth.
+- That audit walks every mutation in checking builds and is skipped
+  otherwise, so release replays pay one branch instead of a scan.
+
 The rate at which volume ahead of you evaporates (**depletion**) is the
 difference between filling in seconds versus never; chapter 07's models
 below exist to make that evaporation realistic rather than optimistic.
@@ -89,3 +99,21 @@ trading day mog reconstructs over 18 million prints with 99.957% matching
 official records exactly - the residual decomposed into documented causes
 (report-time aggregation, off-book liquidity), archived under
 `results/ground-truth/`.
+
+## 6. Scripted scenario runs: the lab notebook
+
+Hand-checking a fill means controlling every input.
+[SimRun.hpp](../include/mog/SimRun.hpp) reads a CSV script - one row per
+event: seed external liquidity (`ext_add`), print an external trade
+(`trade`), post or cancel a strategy order (`strat_limit`, `strat_ioc`,
+`strat_cancel`), or pause the market (`halt`, `resume`) - and steps the
+simulator through it in timestamp order, letting time-based models act on
+the gaps between rows. Prints arriving while halted are dropped, not
+queued.
+
+Strategy refs live above 2^62 so they can never collide with external
+ones; strategy rows take a flags column for hidden (`nd`) and pegged
+(`mid`, `bid`, `ask`) orders. Every row drains the decision pipeline,
+then appends maker and taker fills to one events log with mid marks -
+the same log the tearsheet recomputes from alone, so a script plus its
+log is a complete re-runnable experiment.

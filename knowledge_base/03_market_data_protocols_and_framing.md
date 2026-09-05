@@ -73,7 +73,9 @@ Raw ITCH messages travel inside two envelope formats:
   number, and a count of contained messages. Because messages are numbered,
   a receiver can detect gaps instantly ("I got 41..50 but last time ended
   at 40 - wait, I skipped nothing; or did I miss 31..35?") and request
-  retransmission. mog validates sequence continuity.
+  retransmission. mog validates sequence continuity. A new session ID
+  restarts sequencing even when it arrives on a heartbeat first (exchange
+  failover), rather than misreading it as a gap.
 
 Together: BinaryFILE for recorded history, MoldUDP64 for live wire - same
 ITCH payloads inside.

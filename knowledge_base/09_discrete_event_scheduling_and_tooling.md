@@ -34,6 +34,8 @@ As simulated time advances, events whose ring comes due demote inward,
 one ring per revolution, until they land on the innermost ring - which
 holds only events within the current 64-nanosecond window, executed in
 exact timestamp order. Ties break deterministically by sequence number.
+Slots are built lazily on first push (chapter 04), so an idle wheel costs
+an allocation and nothing else.
 
 ## 3. The SPSC ring: two workers, one conveyor belt
 

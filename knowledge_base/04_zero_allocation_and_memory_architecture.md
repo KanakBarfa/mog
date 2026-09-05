@@ -38,6 +38,12 @@ means putting the number back on a free list. Both are a few CPU cycles.
 
 Two refinements matter:
 
+- **Lazy construction**: the arena reserves all storage up front (still
+  zero replay-time allocation), but slots are built on first acquire in
+  index order instead of all at construction. A replay that uses a
+  fraction of capacity never faults the rest; the allocation sequence is
+  identical either way, so behavior cannot differ. Same treatment in the
+  scheduler and timing wheel.
 - **Cache-line alignment**: CPUs move memory in 64-byte lines. Data
   spanning two lines costs two fetches; contended data sharing one line
   makes cores gossip over every write. Arena slots are aligned so each

@@ -30,6 +30,12 @@ mutation, with S9 pinning stacked-order arithmetic by hand. If you see an
 estimate-shaped API, it is legacy; truth lives in
 `OrderBook::for_each_in_level`.
 
+## Analytics
+
+| Assumption | Meaning | Boundary |
+|---|---|---|
+| Drawdown needs a positive running peak | `max_drawdown_bps` divides by peak equity from a zero base, so strategies losing from inception report 0 bps (absolute ticks are still exact) | Fund with an explicit capital base before trusting bps; ticks column stays comparable |
+
 ## Calibration status
 
 No parameter in this repository claims empirical validity. The evaluation
@@ -40,7 +46,7 @@ good for.
 
 ## Verification posture
 
-Hand-computed scenario suite (S1–S12), boolean conservation audit exposed to
+Hand-computed scenario suite (S1–S14), boolean conservation audit exposed to
 harnesses instead of aborting, SHA-256 trace digests pinning every script,
 and differential tests against a reference book. See
 [Benchmark methodology](benchmark-methodology.md) for how perf claims are

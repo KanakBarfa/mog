@@ -17,11 +17,12 @@ Canonical 200k-op feed (132k market rows, 44k scripted actions):
 | nautilus_trader 1.231.0 (tick ingest baseline) | 133,000 | yes* |
 | mog python shim driver | **61,122** | yes |
 
-Stated plainly: their njit fast path replays faster than our engine -
-1.7x - because it does less per tick. Our number carries exact per-op
-queue recomputation, conservation audits, decision pipelines, STP checks
-and SHA-256 trace hashing inline. Speed-with-proofs is the product; raw
-replay alone was never the claim.
+Stated plainly for Round 1: their njit fast path replayed faster than our
+engine - 1.7x - because it does less per tick. Our number carries exact
+per-op queue recomputation, conservation audits, decision pipelines, STP
+checks and SHA-256 trace hashing inline. Speed-with-proofs is the product;
+raw replay alone was never the claim. (Outcome superseded: Round 4 re-runs
+this workload after the optimization pass.)
 
 ## Round 2 - nautilus full loop
 
@@ -49,6 +50,21 @@ a maker-taker strategy would be invisible in such a backtest. Caveat
 recorded honestly: upstream may expect a different event composition to
 drive passive fills; the finding is stated as configuration-plus-outcome,
 and the harness exists to re-run both halves.
+
+## Round 4 - re-run after the optimization pass
+
+Same 176,096-op canonical feed, same i5-7500T host class, median of 5 with
+cooldown, commit `02b171a` (competitors not re-run):
+
+| participant | events/sec | self-deterministic |
+|---|---:|:---:|
+| **mog** native C++ (frontier) | **3,765,650** | yes (25,077 fills, identical) |
+| mog native C++, pre-optimization control (`51f4faa` rebuilt here) | 698,421 | yes |
+| hftbacktest 2.4.4, numba njit loop (Round 1) | 1,246,000 | yes |
+| mog python shim driver | 300,401 | yes |
+
+The control reproduces Round 1 within 2%, so the 5.4x native gain and the
+~3x lead over njit are engine work, not the machine. Fills identical.
 
 ## Reproduce
 

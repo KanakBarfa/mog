@@ -6,6 +6,34 @@ semver, single-sourced from CMakeLists.txt.
 
 ## [Unreleased]
 
+### Fixed
+- STP decrement now syncs the resting tracker mirror and emits the maker
+  fill report; `audit()` failed on this path before (new S15 coverage).
+- Cancelled and replaced-away orders settle queue positions of mates left
+  behind (new S14 coverage).
+- Scripted halt/resume rows no longer submit phantom zero-qty orders that
+  polluted decisions and the trace digest.
+- OUCH order-table erase uses backward-shift deletion; the old
+  reinsert-during-traversal could grow the table mid-erase.
+- MoldUDP64 adopts a new session on heartbeat failover instead of reporting
+  a false sequence gap.
+- Sweeps touching more than 8 price levels now settle queue positions for
+  every touched level; the overflow level settles on level exit.
+- Session-tolerant listen path honors the caller's ISA kernel table, so
+  differential tests pin the selected kernel.
+- Online markout fills wait for their horizon mids instead of dropping to
+  zero when streamed in event order.
+- Price-ladder page shift capped at 12; larger shifts shifted a u64 by 64 or
+  more, which is undefined behavior.
+
+### Changed
+- Hot-path cycle cuts, all A/B measured in `results/ab-hotpath-20260905/`:
+  per-mutation conservation scan gated on active contracts, slot-indexed
+  queue recomputation, probeless FIFO-head matching, lazy slot allocation,
+  O(1) tail rest (110x rest-heavy), take-path handle threading.
+- Falsified with evidence and reverted: lazy page zeroing, hierarchical
+  directory bitmaps, order-carried table slots (each regressed Ir/op).
+
 ### Added
 - Runnable examples: `examples/python/quickstart.py` (also executed by the
   wheel test suite), `examples/python/market_maker.py`,

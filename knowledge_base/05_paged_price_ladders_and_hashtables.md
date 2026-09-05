@@ -36,7 +36,8 @@ floor, but floors are built only when a guest arrives needing them.
 A small directory maps page numbers to memory claimed on demand from a
 fixed pool. Dense prices hit pure array indexing; arbitrarily wide spreads
 never blow up memory; empty price ranges cost only a null entry in the
-directory.
+directory. Page shifts are capped so the per-page summary always fits one
+64-bit word - larger shifts would be undefined behavior, not just slower.
 
 ## 3. Order ID to slot: Fibonacci hashing
 
@@ -60,7 +61,22 @@ onward at fixed offsets until a free one appears - everything stays in one
 flat array that CPUs cache well. Find it wired into the book's order
 lookup in [OrderBook.hpp](../include/mog/OrderBook.hpp).
 
-## 4. Why this matters beyond speed
+## 4. Skipping lookups already answered
+
+Most hot-path lookups re-derive something already in hand, so the engine
+carries answers forward instead of re-probing:
+
+- Matching against a queue head builds the handle straight from the head
+  index and its generation - no hash probe on the consuming path.
+- Queue walks pass the arena slot index along, so per-order tracker
+  updates never touch the id table either.
+- A take threads its handle from lookup to reduction, cutting the
+  per-execution probes from four to two.
+
+Each shortcut is verified against the table it skips in checking builds,
+so a desync fails loudly in CI rather than drifting silently.
+
+## 5. Why this matters beyond speed
 
 Both structures preserve determinism by construction: index math depends
 only on input values, never on iteration order, pointer addresses, or

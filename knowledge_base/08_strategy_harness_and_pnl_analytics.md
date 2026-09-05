@@ -82,6 +82,8 @@ you bought before a rise. Consistently negative means adverse selection:
 you keep buying right before falls, i.e., better-informed flow is using
 you (chapter 07's momentum coupling models exactly this force).
 
-mog computes markouts at several horizons ($\Delta t$ = 1ms, 10ms, 100ms,
-1s), because "good fill" depends entirely on how long you hold: a fill
-good at +1s may look terrible at +1ms.
+mog computes markouts at several horizons ($\Delta t$ = 1µs, 10µs, 100µs),
+because "good fill" depends entirely on how long you hold: a fill good at
++100µs may look terrible at +1µs. Fills recorded before their horizon mids
+arrive wait in a pending buffer and resolve as the mids stream in, so
+online and offline call orders agree.
